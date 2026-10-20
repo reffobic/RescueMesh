@@ -1,9 +1,3 @@
-// Fault tolerance interface (points 4 and 5).
-//
-// This is only the interface for now. The node always reports healthy and
-// nothing is logged or replicated yet. The signatures below are final, the
-// behaviour behind them gets filled in later.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +6,6 @@ use tokio::task::JoinHandle;
 
 use crate::types::ResponsePlan;
 
-/// origin node id -> highest contiguous sequence number applied from that node
 pub type VersionVector = HashMap<u32, u64>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,18 +13,14 @@ pub struct LogEntry {
     pub origin_node: u32,
     pub seq: u64,
     pub request_id: String,
-    /// None means the entry is a tombstone (the seq was used but no plan was kept)
     pub plan: Option<ResponsePlan>,
     pub committed_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum IdempotencyOutcome {
-    /// Nobody has this request yet, go ahead and compute it
     Acquired,
-    /// Already done, return this plan as is
     Cached(ResponsePlan),
-    /// Another worker on this node is computing it right now
     InProgress,
 }
 
@@ -44,7 +33,6 @@ pub enum FaultError {
     PeerRpcError(String),
 }
 
-/// Numbers collected during one failure and recovery cycle of a node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecoveryMetrics {
     pub failed_for_ms: u64,
@@ -55,17 +43,12 @@ pub struct RecoveryMetrics {
     pub entries_sent: u64,
 }
 
-/// To be implemented by the RPC layer
 #[async_trait::async_trait]
 pub trait PeerReplicationTransport: Send + Sync {
-    /// Send a new entry to the other nodes, returns how many acknowledged it
     async fn broadcast_entry(&self, entry: &LogEntry) -> usize;
 
-    /// Ask every reachable peer for its version vector
     async fn fetch_peer_versions(&self) -> Result<Vec<(u32, VersionVector)>, FaultError>;
 
-    /// Exchange missing entries with one peer, returns the peer's updated
-    /// version vector and the entries we were missing
     async fn sync_with_peer(
         &self,
         peer_id: u32,
@@ -83,7 +66,6 @@ impl FaultToleranceManager {
         Arc::new(Self { node_id })
     }
 
-    // Health (stub: always healthy)
     pub async fn accepts_client_work(&self) -> bool {
         true
     }
@@ -98,7 +80,6 @@ impl FaultToleranceManager {
         false
     }
 
-    // Duplicate request handling (stub: never a duplicate)
     pub async fn begin_request(&self, _request_id: &str) -> Result<IdempotencyOutcome, FaultError> {
         Ok(IdempotencyOutcome::Acquired)
     }
@@ -107,7 +88,6 @@ impl FaultToleranceManager {
 
     pub async fn abort_request(&self, _request_id: &str) {}
 
-    // Logging and replication (stub: nothing is stored, the transport is not used)
     pub async fn record_and_replicate(
         &self,
         request_id: String,
@@ -123,7 +103,6 @@ impl FaultToleranceManager {
         })
     }
 
-    // Peer side handlers (stub: accept and ignore)
     pub async fn on_receive_replicated_entry(&self, _entry: LogEntry) -> Result<(), FaultError> {
         Ok(())
     }
@@ -136,7 +115,6 @@ impl FaultToleranceManager {
         Ok((HashMap::new(), Vec::new()))
     }
 
-    // Recovery (stub: nothing to recover)
     pub async fn recover_state_from_peers(
         &self,
         _transport: &dyn PeerReplicationTransport,
@@ -152,7 +130,6 @@ impl FaultToleranceManager {
         tokio::spawn(async {})
     }
 
-    // Inspection
     pub async fn get_version_vector(&self) -> VersionVector {
         HashMap::new()
     }
