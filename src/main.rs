@@ -1,4 +1,5 @@
 mod election;
+mod fault_tolerance;
 mod rpc;
 mod types;
 mod worker;
