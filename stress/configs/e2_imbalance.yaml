@@ -1,0 +1,15 @@
+name: e2_imbalance
+description: Artificially load node 0; show election shifts work away
+hosts: configs/hosts.json
+repeats: 5
+client_counts: [30]
+requests_per_client: 50
+timeout_s: 5.0
+warmup_s: 2
+# Harness will call fault_inject --sim-load before traffic
+imbalance:
+  node_id: 0
+  extra_queue: 15
+  cpu: 0.95
+output_dir: results/e2_imbalance
+baseline_output_dir: results/e2_baseline_note

@@ -1,0 +1,14 @@
+{
+  "peers": [
+    {"id": 0, "host": "127.0.0.1", "port": 9000},
+    {"id": 1, "host": "127.0.0.1", "port": 9001},
+    {"id": 2, "host": "127.0.0.1", "port": 9002}
+  ],
+  "admin_ports": {
+    "0": 9100,
+    "1": 9101,
+    "2": 9102
+  },
+  "multicast": true,
+  "comment": "Client sends Request to all peers when multicast=true (project model)."
+}
