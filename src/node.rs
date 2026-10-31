@@ -2,10 +2,8 @@
 //!   elect -> (winner) execute -> replicate to quorum -> reply to client -> release.
 //! Losers wait for the replicated plan and re-elect if the winner dies or stalls.
 
-use crate::config::Config;
-use crate::election::{wait_for, ElectionStrategy};
-use crate::metrics::Metrics;
-use crate::models::{IncidentRequest, ResponsePlan};
+use crate::election::{wait_for, Config, ElectionStrategy, Metrics};
+use crate::types::{IncidentRequest, ResponsePlan};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
