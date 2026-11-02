@@ -1,19 +1,4 @@
-//!
-//!   1. CONFIG    - timeouts, weights, caps (all overridable via RM_* env vars)
-//!   2. METRICS   - measured machine/client inputs + the SCORE FUNCTION
-//!   3. INTERFACE - `ElectionStrategy` trait, `Outcome`, `wait_for` helper
-//!   4. BULLY     - the load-aware Bully algorithm itself
-//!
-//! Load-aware Bully, run per request.
-//!   1. Priority is dynamic: (load_score, node_id) instead of the static node ID.
-//!      The score is snapshotted once per round, so one round compares fixed priorities.
-//!   2. Scope is one request/attempt, not the cluster. There is no standing coordinator.
-//!   3. ELECTION goes to all *live* peers (failure detector), not only "higher" ones,
-//!      because with dynamic priority the initiator does not know who is better.
-//!   4. Every node that receives the multicast request initiates (multiple initiators).
-//!   5. Failover = re-run with attempt+1 (done by Node::process).
-//! The "pairwise comparisons" (1 vs 2, 1 vs 3, 2 vs 3) happen implicitly: a node that
-//! receives ELECTION from a worse node answers OK and runs its own round against the rest.
+// Load-aware Bully, based on a dynamic score.
 
 use crate::node::{Msg, Node, NodeId};
 use async_trait::async_trait;
@@ -22,17 +7,13 @@ use std::{
     fs,
     path::Path,
     sync::{
-        atomic::{AtomicU32, Ordering::Relaxed},
+        atomic::{AtomicU32, AtomicU64, Ordering::Relaxed},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{sync::Notify, time::sleep};
 
-
-// ============================================================================
-// 1. CONFIG
-// ============================================================================
 
 #[derive(Clone, Copy, Debug)]
 pub enum Policy {
@@ -42,8 +23,7 @@ pub enum Policy {
     Random,
 }
 
-/// Weights should sum to 1.0. Machine terms (cpu, queue, svc, io, mem) get 80%,
-/// communication terms (rel, delay) 20%.
+// Weights should sum to 1.0. Machine terms (cpu, queue, svc, io, mem) get 80%, communication terms (rel, delay) 20%.
 #[derive(Clone, Copy, Debug)]
 pub struct Weights {
     pub cpu: f64,
@@ -57,21 +37,23 @@ pub struct Weights {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    // --- election (Bully) ---
+    // Election (Bully)
     pub t_ok: Duration,        // wait for OK after ELECTION ("election acknowledgment")
     pub t_coord: Duration,     // wait for COORDINATOR after getting an OK
     pub max_restarts: u32,     // restarts inside one election round
     pub max_attempts: u32,     // re-elections after the winner failed to finish
-    // --- failure detection / execution ---
+    // Failure Detection / Execution
     pub heartbeat: Duration,
     pub fail_after: Duration,
+    pub warmup: Duration,       // max wait to hear from a peer after (re)start before serving alone
+    pub rejoin_guard: bool,     // false = disable the eligibility guard (for ablation experiments)
     pub exec_timeout: Duration, // losers wait this long for the winner's result
-    // --- replication ---
+    // Replication
     pub repl_timeout: Duration, // give up waiting for quorum after this
     pub repl_retry: Duration,   // resend Replicate to un-acked peers this often
-    // --- client feedback ---
+    // Client Feedback
     pub ack_timeout: Duration,  // an un-acked reply counts against reliability
-    // --- metrics ---
+    // Metrics
     pub sample_every: Duration,
     pub queue_cap: f64,         // queue length that counts as "fully loaded"
     pub svc_cap_ms: f64,        // service time that counts as "fully slow"
@@ -89,7 +71,7 @@ fn env_f(k: &str, d: f64) -> f64 {
     std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
 }
 fn env_ms(k: &str, d: u64) -> Duration {
-    Duration::from_millis(env_u(k, d))
+    Duration::from_millis(env_u(k, d).max(1))
 }
 
 impl Config {
@@ -97,10 +79,12 @@ impl Config {
         Config {
             t_ok: env_ms("RM_T_OK_MS", 100),
             t_coord: env_ms("RM_T_COORD_MS", 500),
-            max_restarts: env_u("RM_MAX_RESTARTS", 3) as u32,
+            max_restarts: env_u("RM_MAX_RESTARTS", 3).clamp(1, u32::MAX as u64) as u32,
             max_attempts: env_u("RM_MAX_ATTEMPTS", 4) as u32,
             heartbeat: env_ms("RM_HEARTBEAT_MS", 300),
             fail_after: env_ms("RM_FAIL_AFTER_MS", 1000),
+            warmup: env_ms("RM_WARMUP_MS", 600),
+            rejoin_guard: env_u("RM_REJOIN_GUARD", 1) != 0,
             exec_timeout: env_ms("RM_EXEC_TIMEOUT_MS", 3000),
             repl_timeout: env_ms("RM_REPL_TIMEOUT_MS", 1500),
             repl_retry: env_ms("RM_REPL_RETRY_MS", 150),
@@ -130,15 +114,13 @@ impl Config {
     }
 }
 
-// ============================================================================
-// 2. METRICS + SCORE FUNCTION
-// ============================================================================
+
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Machine {
-    pub cpu: f64, // 0..1 smoothed utilisation
-    pub mem: f64, // 0..1 used fraction
-    pub io: f64,  // 0..1 max(disk, net) bandwidth vs. configured cap
+    pub cpu: f64, // [0-1] smoothed utilisation
+    pub mem: f64, // [0-1] used fraction
+    pub io: f64,  // [0-1] max(disk, net) bandwidth vs. configured cap
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -168,8 +150,8 @@ impl Metrics {
         Arc::new(Self::default())
     }
 
-    // ---- queue / service time ----
-    /// Called the moment this node wins an election (reserves capacity before work starts).
+    // Queue / Service Time
+    // Called the moment this node wins an election
     pub fn queue_inc(&self) {
         self.queue.fetch_add(1, Relaxed);
     }
@@ -187,7 +169,7 @@ impl Metrics {
         *self.svc_ms.lock().unwrap()
     }
 
-    // ---- demo hooks ----
+    // ---- Demo Hooks ----
     pub fn sim_load(&self, extra_queue: u32, cpu: Option<f64>) {
         self.queue_extra.store(extra_queue, Relaxed);
         *self.cpu_override.lock().unwrap() = cpu;
@@ -201,7 +183,7 @@ impl Metrics {
         m
     }
 
-    // ---- per-client communication stats (fed by client Ack messages) ----
+    // Per-client communication stats (fed by client Ack messages)
     pub fn client(&self, client: &str) -> ClientStats {
         self.clients.lock().unwrap().get(client).copied().unwrap_or_default()
     }
@@ -219,13 +201,16 @@ impl Metrics {
         c.samples += 1;
     }
 
-    // ---- the score function ----
+    // Score function
     pub fn score(&self, cfg: &Config, client: &str) -> u64 {
         let m = self.machine();
         let cs = self.client(client);
         let cpu = m.cpu.clamp(0.0, 1.0);
         let queue = (self.queue_len() as f64 / cfg.queue_cap).min(1.0);
-        let svc = (self.svc_ms() / cfg.svc_cap_ms).min(1.0);
+        let measured_svc = self.svc_ms();
+        let svc = (if measured_svc == 0.0 { cfg.svc_cap_ms * 0.5 } else { measured_svc }
+            / cfg.svc_cap_ms)
+            .min(1.0);
         let rtt = (cs.rtt_ms / cfg.rtt_cap_ms).min(1.0);
         let s = match cfg.policy {
             Policy::Weighted => {
@@ -237,7 +222,7 @@ impl Metrics {
                     + w.mem * m.mem.clamp(0.0, 1.0)
                     + w.rel * (1.0 - cs.reliability)
                     + w.delay * rtt;
-                // Guards: conditions that should nearly disqualify a node, not just nudge it.
+                // Conditions that should nearly disqualify a node
                 if cpu > 0.95 || m.mem > 0.90 || cs.reliability < 0.5 {
                     s += 0.5;
                 }
@@ -260,8 +245,25 @@ impl Metrics {
         )
     }
 
-    // ---- sampler (Linux /proc; zeros elsewhere) ----
+    // Sampler (Linux /proc; zeros elsewhere)
     pub fn spawn_sampler(self: &Arc<Self>, every: Duration, disk_cap: f64, net_cap: f64) {
+        #[cfg(not(target_os = "linux"))]
+        eprintln!("WARNING,METRICS,OS_UNSUPPORTED,procfs metrics are unavailable; CPU, memory, and I/O may remain zero");
+        #[cfg(target_os = "linux")]
+        {
+            let missing: Vec<&str> = [
+                ("/proc/stat", read_cpu().is_none()),
+                ("/proc/meminfo", read_mem().is_none()),
+                ("/proc/diskstats", read_disk().is_none()),
+                ("/proc/net/dev", read_net().is_none()),
+            ]
+            .into_iter()
+            .filter_map(|(name, unavailable)| unavailable.then_some(name))
+            .collect();
+            if !missing.is_empty() {
+                eprintln!("WARNING,METRICS,PROCFS_UNAVAILABLE,{}", missing.join("|"));
+            }
+        }
         let me = self.clone();
         tokio::spawn(async move {
             let mut p_cpu = read_cpu();
@@ -357,28 +359,46 @@ fn read_net() -> Option<u64> {
     Some(bytes)
 }
 
-// ============================================================================
-// 3. ELECTION INTERFACE
-// ============================================================================
+
+
+
+
+pub const NO_WINNER: NodeId = NodeId::MAX;
 
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub winner: NodeId,
+    /// Which election attempt produced this winner (0 = first try, >0 = failover re-election).
+    pub attempt: u32,
     pub elapsed: Duration,
     /// This node's own score snapshot for the round (for logging/analysis).
     pub my_score: u64,
-    /// false if the election gave up waiting and decided on partial information.
+    /// False if the election could not safely identify a winner.
     pub complete: bool,
+}
+
+impl Outcome {
+    /// (attempt, winner) - the key replication uses to order duplicate executions.
+    pub fn precedence(&self) -> (u32, NodeId) {
+        (self.attempt, self.winner)
+    }
+}
+
+/// CONFLICT RULE for duplicate executions of the same request_id (e.g. after a false failure detection or lost messages made two nodes both execute):
+/// For Replication task!
+pub fn supersedes(new: (u32, NodeId), old: (u32, NodeId)) -> bool {
+    new.0 > old.0 || (new.0 == old.0 && new.1 < old.1)
 }
 
 #[async_trait]
 pub trait ElectionStrategy: Send + Sync {
     fn name(&self) -> &'static str;
-    /// Elect the node that should execute `req_id`. `attempt` > 0 means a re-election
-    /// after the previous winner failed to finish (failover).
+    /// Elect the node that should execute `req_id`. `attempt` > 0 means a re-election after the previous winner failed to finish (failover).
     async fn elect(&self, node: &Arc<Node>, req_id: &str, client: &str, attempt: u32) -> Outcome;
     /// Handle an election-protocol message received from a peer.
     async fn on_message(&self, node: &Arc<Node>, msg: Msg);
+    /// How many conflicting COORDINATOR announcements this node has observed (two nodes declared themselves winner of the same round).
+    fn duplicate_coordinators(&self) -> u64;
     /// Drop per-request state once the request is finished (bounds memory).
     fn forget(&self, req_id: &str);
     /// Drop all state (called when a node rejoins after a simulated failure).
@@ -406,20 +426,19 @@ pub async fn wait_for<F: Fn() -> bool>(notify: &Notify, timeout: Duration, cond:
     }
 }
 
-// ============================================================================
-// 4. LOAD-AWARE BULLY
-// ============================================================================
 
 struct Round {
     my_score: u64,
     got_ok: bool,
     coordinator: Option<NodeId>,
+    last_touched: Instant,
 }
 
 #[derive(Default)]
 pub struct LoadAwareBully {
     rounds: Mutex<HashMap<(String, u32), Round>>,
     notify: Notify,
+    dup_coordinators: AtomicU64,
 }
 
 impl LoadAwareBully {
@@ -434,9 +453,64 @@ impl LoadAwareBully {
             my_score: node.score_for(client),
             got_ok: false,
             coordinator: None,
+            last_touched: Instant::now(),
         });
+        r.last_touched = Instant::now();
         f(r)
     }
+
+    fn prune_expired(&self, retention: Duration) {
+        let now = Instant::now();
+        self.rounds
+            .lock()
+            .unwrap()
+            .retain(|_, round| now.duration_since(round.last_touched) <= retention);
+    }
+
+}
+
+const SCORE_BUCKET_WIDTH: u64 = 101;
+const ROUND_RETENTION: Duration = Duration::from_secs(60);
+
+fn request_node_tie_key(req_id: &str, node_id: NodeId) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in req_id.bytes().chain(node_id.to_le_bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn outranks(req_id: &str, score: u64, node_id: NodeId, other_score: u64, other_id: NodeId) -> bool {
+    (
+        score / SCORE_BUCKET_WIDTH,
+        request_node_tie_key(req_id, node_id),
+        node_id,
+    ) < (
+        other_score / SCORE_BUCKET_WIDTH,
+        request_node_tie_key(req_id, other_id),
+        other_id,
+    )
+}
+
+fn schedule_broadcast_retries(node: &Arc<Node>, msg: Msg, interval: Duration) {
+    let node = node.clone();
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            sleep(interval).await;
+            node.broadcast(&msg).await;
+        }
+    });
+}
+
+fn schedule_send_retries(node: &Arc<Node>, to: NodeId, msg: Msg, interval: Duration) {
+    let node = node.clone();
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            sleep(interval).await;
+            node.send_to(to, &msg).await;
+        }
+    });
 }
 
 #[async_trait]
@@ -448,10 +522,29 @@ impl ElectionStrategy for LoadAwareBully {
     async fn elect(&self, node: &Arc<Node>, req_id: &str, client: &str, attempt: u32) -> Outcome {
         let start = Instant::now();
         let (t_ok, t_coord, max_restarts) = (node.cfg.t_ok, node.cfg.t_coord, node.cfg.max_restarts);
+        self.prune_expired(ROUND_RETENTION);
         let key = (req_id.to_string(), attempt);
-        let my_score = self.with_round(node, &key, client, |r| r.my_score);
-        let done = |w: NodeId, complete: bool| Outcome { winner: w, elapsed: start.elapsed(), my_score, complete };
+        let my_score = self.with_round(node, &key, client, |r| {
+            r.got_ok = false;
+            r.coordinator = None;
+            r.my_score
+        });
+        let done = |w: NodeId, complete: bool| Outcome { winner: w, attempt, elapsed: start.elapsed(), my_score, complete };
+        let retry_interval = (t_ok / 3).max(Duration::from_millis(1));
 
+        // A node that just (re)started or rejoined has not yet re-learned who is alive and has not synced its state, so it must not win (it could act on stale data,
+        if !node.is_ready() {
+            let k = key.clone();
+            wait_for(&self.notify, t_ok + t_coord, || {
+                let m = self.rounds.lock().unwrap();
+                m.get(&k).map_or(false, |r| r.coordinator.is_some())
+            })
+            .await;
+            let w = self.with_round(node, &key, client, |r| r.coordinator).unwrap_or(NO_WINNER);
+            return done(w, w != NO_WINNER);
+        }
+
+        let mut heard_ok = false;
         for _ in 0..max_restarts {
             // A COORDINATOR announcement may already have arrived.
             if let Some(w) = self.with_round(node, &key, client, |r| r.coordinator) {
@@ -461,14 +554,15 @@ impl ElectionStrategy for LoadAwareBully {
                 break; // nobody to ask => I win
             }
             self.with_round(node, &key, client, |r| r.got_ok = false);
-            node.broadcast(&Msg::Election {
+            let election = Msg::Election {
                 req_id: req_id.into(),
                 attempt,
                 from: node.id,
                 score: my_score,
                 client: client.into(),
-            })
-            .await;
+            };
+            node.broadcast(&election).await;
+            schedule_broadcast_retries(node, election, retry_interval);
 
             // Step 1: wait for an OK (election acknowledgment).
             let k = key.clone();
@@ -480,7 +574,9 @@ impl ElectionStrategy for LoadAwareBully {
             if let Some(w) = self.with_round(node, &key, client, |r| r.coordinator) {
                 return done(w, true);
             }
-            if !self.with_round(node, &key, client, |r| r.got_ok) {
+            let got_ok = self.with_round(node, &key, client, |r| r.got_ok);
+            heard_ok |= got_ok;
+            if !got_ok {
                 break; // no OK => nobody better answered => elect myself
             }
 
@@ -497,40 +593,155 @@ impl ElectionStrategy for LoadAwareBully {
             // The better node never announced (probably died) -> restart the round.
         }
 
-        // Declare myself coordinator. If restarts were exhausted a better node may still
-        // exist (split decision); duplicate execution is harmless (request_id idempotency).
-        let exhausted = self.with_round(node, &key, client, |r| r.got_ok);
-        self.with_round(node, &key, client, |r| r.coordinator = Some(node.id));
-        node.broadcast(&Msg::Coordinator { req_id: req_id.into(), attempt, winner: node.id }).await;
-        done(node.id, !exhausted)
+        // Resolve the final decision under one lock so a concurrent OK or coordinator
+        // announcement cannot slip between checking the round and declaring ourselves.
+        let (winner, declared) = {
+            let mut rounds = self.rounds.lock().unwrap();
+            let Some(round) = rounds.get_mut(&key) else {
+                return done(NO_WINNER, false);
+            };
+            round.last_touched = Instant::now();
+            if let Some(winner) = round.coordinator {
+                (winner, false)
+            } else if heard_ok || round.got_ok {
+                (NO_WINNER, false)
+            } else {
+                round.coordinator = Some(node.id);
+                (node.id, true)
+            }
+        };
+        if !declared {
+            return done(winner, winner != NO_WINNER);
+        }
+        let coordinator = Msg::Coordinator { req_id: req_id.into(), attempt, winner: node.id };
+        node.broadcast(&coordinator).await;
+        schedule_broadcast_retries(node, coordinator, retry_interval);
+        done(node.id, true)
     }
 
     async fn on_message(&self, node: &Arc<Node>, msg: Msg) {
+        self.prune_expired(ROUND_RETENTION);
         match msg {
-            Msg::Election { req_id, attempt, from, score, client } => {
+            Msg::Election { req_id, attempt, from, score, client: _ } => {
+                if !node.is_ready() {
+                    return; //
+                }
                 let key = (req_id.clone(), attempt);
-                let my_score = self.with_round(node, &key, &client, |r| r.my_score);
-                // I outrank the sender iff my (score, id) is smaller.
-                if (my_score, node.id) < (score, from) {
-                    node.send_to(from, &Msg::Ok { req_id, attempt, from: node.id }).await;
+                let my_score = {
+                    let mut rounds = self.rounds.lock().unwrap();
+                    let Some(round) = rounds.get_mut(&key) else {
+                        return; // this node does not hold a local election for this request
+                    };
+                    round.last_touched = Instant::now();
+                    round.my_score
+                };
+                if outranks(&req_id, my_score, node.id, score, from) {
+                    let ok = Msg::Ok { req_id, attempt, from: node.id };
+                    node.send_to(from, &ok).await;
+                    schedule_send_retries(node, from, ok, (node.cfg.t_ok / 3).max(Duration::from_millis(1)));
                 }
             }
             Msg::Ok { req_id, attempt, .. } => {
-                self.with_round(node, &(req_id, attempt), "", |r| r.got_ok = true);
-                self.notify.notify_waiters();
+                let key = (req_id, attempt);
+                let updated = {
+                    let mut rounds = self.rounds.lock().unwrap();
+                    if let Some(round) = rounds.get_mut(&key) {
+                        round.got_ok = true;
+                        round.last_touched = Instant::now();
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if updated {
+                    self.notify.notify_waiters();
+                }
             }
             Msg::Coordinator { req_id, attempt, winner } => {
-                self.with_round(node, &(req_id, attempt), "", |r| r.coordinator = Some(winner));
+                let key = (req_id.clone(), attempt);
+                let prev = {
+                    let mut rounds = self.rounds.lock().unwrap();
+                    let Some(round) = rounds.get_mut(&key) else {
+                        return;
+                    };
+                    round.last_touched = Instant::now();
+                    let previous = round.coordinator;
+                    round.coordinator = Some(previous.map_or(winner, |current| current.min(winner)));
+                    previous
+                };
+                if let Some(first) = prev {
+                    if first != winner {
+                        // Two different nodes declared themselves winner of the same round.
+                        self.dup_coordinators.fetch_add(1, Relaxed);
+                        println!("DUPCOORD,{req_id},{attempt},{first},{winner}");
+                    }
+                }
                 self.notify.notify_waiters();
             }
             _ => {}
         }
     }
 
+    fn duplicate_coordinators(&self) -> u64 {
+        self.dup_coordinators.load(Relaxed)
+    }
     fn forget(&self, req_id: &str) {
         self.rounds.lock().unwrap().retain(|(r, _), _| r != req_id);
     }
     fn reset(&self) {
         self.rounds.lock().unwrap().clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{outranks, request_node_tie_key, SCORE_BUCKET_WIDTH};
+
+    #[test]
+    fn score_order_is_transitive_across_bucket_boundaries() {
+        let scores = [0, 100, 101, 200, 201, 300, 10_000];
+        let nodes = [1, 2, 3];
+        for req_id in ["request-a", "request-b"] {
+            for &a_score in &scores {
+                for &b_score in &scores {
+                    for &c_score in &scores {
+                        for &a_node in &nodes {
+                            for &b_node in &nodes {
+                                for &c_node in &nodes {
+                                    if outranks(req_id, a_score, a_node, b_score, b_node)
+                                        && outranks(req_id, b_score, b_node, c_score, c_node)
+                                    {
+                                        assert!(outranks(req_id, a_score, a_node, c_score, c_node));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lower_score_buckets_always_outrank_higher_buckets() {
+        assert!(outranks("request", 100, 3, 101, 1));
+        assert!(outranks("request", 200, 3, 202, 1));
+    }
+
+    #[test]
+    fn tied_score_buckets_use_request_specific_node_order() {
+        let scores = SCORE_BUCKET_WIDTH * 4;
+        let order_a = [1, 2, 3].map(|node| (request_node_tie_key("request-a", node), node));
+        let order_b = [1, 2, 3].map(|node| (request_node_tie_key("request-0", node), node));
+        assert_ne!(order_a, order_b);
+        for (request, order) in [("request-a", order_a), ("request-0", order_b)] {
+            let winner = *order.iter().min().unwrap();
+            for &(_, node) in &order {
+                assert_eq!(
+                    outranks(request, scores, winner.1, scores, node),
+                    winner.1 != node
+                );
+            }
+        }
     }
 }
