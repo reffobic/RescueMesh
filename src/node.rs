@@ -574,7 +574,14 @@ impl Node {
             .find(|(i, _)| *i == id)
             .expect("my id not in peer list")
             .1;
-        let sock = UdpSocket::bind(addr).await.expect("bind failed");
+        let bind_fallback =
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
+        let sock = match UdpSocket::bind(addr).await {
+            Ok(sock) => sock,
+            Err(_) => UdpSocket::bind(bind_fallback)
+                .await
+                .expect("failed to bind to address or 0.0.0.0"),
+        };
         let (request_tx, request_rx) = mpsc::channel(cfg.request_queue_capacity);
         let request_slots = Arc::new(Semaphore::new(cfg.max_concurrent_requests));
         let cpu_slots = Arc::new(Semaphore::new(cfg.cpu_workers));
