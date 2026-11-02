@@ -258,7 +258,15 @@ mod tests {
             recommended_route: vec![],
             processed_by_node: by,
         };
-        let stored_by = |n: &Node| n.plans.lock().unwrap().get("dup").unwrap().0.processed_by_node;
+        let stored_by = |n: &Node| {
+            n.plans
+                .lock()
+                .unwrap()
+                .get("dup")
+                .unwrap()
+                .0
+                .processed_by_node
+        };
 
         assert!(node.store_plan(plan(3), false, (0, 3)));
         assert!(node.store_plan(plan(2), false, (0, 2))); // same attempt, lower node wins
@@ -638,7 +646,10 @@ impl Node {
             if self.alive_peers().is_empty() {
                 println!("[node {}] warmup: no peer heard, serving alone", self.id);
             } else if !self.sync_state().await {
-                println!("[node {}] warmup: state sync incomplete, serving anyway", self.id);
+                println!(
+                    "[node {}] warmup: state sync incomplete, serving anyway",
+                    self.id
+                );
             }
         }
         self.ready.store(true, Relaxed);
@@ -657,7 +668,8 @@ impl Node {
                 from: Some(peer),
                 ..Default::default()
             };
-            self.send_to(peer, &Msg::SyncRequest { from: self.id }).await;
+            self.send_to(peer, &Msg::SyncRequest { from: self.id })
+                .await;
             let wait = self.cfg.t_coord.max(Duration::from_millis(200));
             let done = wait_for(&self.sync_notify, wait, || {
                 self.sync.lock().unwrap().complete()
@@ -665,7 +677,12 @@ impl Node {
             .await;
             if done {
                 self.sync.lock().unwrap().from = None;
-                println!("SYNC,{},{},{}", self.id, peer, self.plans.lock().unwrap().len());
+                println!(
+                    "SYNC,{},{},{}",
+                    self.id,
+                    peer,
+                    self.plans.lock().unwrap().len()
+                );
                 return true;
             }
         }
@@ -680,7 +697,10 @@ impl Node {
             plans
                 .iter()
                 .map(|(id, (plan, under))| {
-                    let (attempt, origin) = precs.get(id).copied().unwrap_or((0, plan.processed_by_node));
+                    let (attempt, origin) = precs
+                        .get(id)
+                        .copied()
+                        .unwrap_or((0, plan.processed_by_node));
                     SyncEntry {
                         plan: plan.clone(),
                         under_replicated: *under,
@@ -693,11 +713,21 @@ impl Node {
         let chunks: Vec<&[SyncEntry]> = entries.chunks(SYNC_CHUNK).collect();
         let parts = chunks.len().max(1) as u32;
         if chunks.is_empty() {
-            let m = Msg::SyncReply { from: self.id, part: 0, parts, entries: vec![] };
+            let m = Msg::SyncReply {
+                from: self.id,
+                part: 0,
+                parts,
+                entries: vec![],
+            };
             self.send_to(to, &m).await;
         }
         for (i, chunk) in chunks.into_iter().enumerate() {
-            let m = Msg::SyncReply { from: self.id, part: i as u32, parts, entries: chunk.to_vec() };
+            let m = Msg::SyncReply {
+                from: self.id,
+                part: i as u32,
+                parts,
+                entries: chunk.to_vec(),
+            };
             self.send_to(to, &m).await;
         }
     }
@@ -960,7 +990,11 @@ impl Node {
                         .record_ack(&client, t0.elapsed().as_secs_f64() * 1000.0);
                 }
             }
-            Msg::Replicate { plan, attempt, from } => {
+            Msg::Replicate {
+                plan,
+                attempt,
+                from,
+            } => {
                 let id = plan.request_id.clone();
                 // Duplicate executions of one request: keep the plan with the higher
                 // (attempt, lower node id) precedence; always ack so the sender can finish.
@@ -975,7 +1009,12 @@ impl Node {
                 .await;
             }
             Msg::SyncRequest { from } => self.serve_sync(from).await,
-            Msg::SyncReply { from, part, parts, entries } => {
+            Msg::SyncReply {
+                from,
+                part,
+                parts,
+                entries,
+            } => {
                 for e in entries {
                     self.store_plan(e.plan, e.under_replicated, (e.attempt, e.origin));
                 }
@@ -1131,7 +1170,8 @@ impl Node {
         if reply_ready {
             if let Some((plan, _)) = completed_plan {
                 for (to, client) in waiters {
-                    self.send_reply(to, &plan, plan_under_replicated, &client).await;
+                    self.send_reply(to, &plan, plan_under_replicated, &client)
+                        .await;
                 }
             }
         } else if completed_plan.is_none() {

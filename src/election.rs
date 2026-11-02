@@ -14,7 +14,6 @@ use std::{
 };
 use tokio::{sync::Notify, time::sleep};
 
-
 #[derive(Clone, Copy, Debug)]
 pub enum Policy {
     Weighted,  // the real score function (default)
@@ -38,30 +37,30 @@ pub struct Weights {
 #[derive(Clone, Debug)]
 pub struct Config {
     // Election (Bully)
-    pub t_ok: Duration,        // wait for OK after ELECTION ("election acknowledgment")
-    pub t_coord: Duration,     // wait for COORDINATOR after getting an OK
-    pub max_restarts: u32,     // restarts inside one election round
-    pub max_attempts: u32,     // re-elections after the winner failed to finish
+    pub t_ok: Duration, // wait for OK after ELECTION ("election acknowledgment")
+    pub t_coord: Duration, // wait for COORDINATOR after getting an OK
+    pub max_restarts: u32, // restarts inside one election round
+    pub max_attempts: u32, // re-elections after the winner failed to finish
     // Failure Detection / Execution
     pub heartbeat: Duration,
     pub fail_after: Duration,
-    pub warmup: Duration,       // max wait to hear from a peer after (re)start before serving alone
-    pub rejoin_guard: bool,     // false = disable the eligibility guard (for ablation experiments)
+    pub warmup: Duration, // max wait to hear from a peer after (re)start before serving alone
+    pub rejoin_guard: bool, // false = disable the eligibility guard (for ablation experiments)
     pub exec_timeout: Duration, // losers wait this long for the winner's result
     // Replication
     pub repl_timeout: Duration, // give up waiting for quorum after this
     pub repl_retry: Duration,   // resend Replicate to un-acked peers this often
     // Client Feedback
-    pub ack_timeout: Duration,  // an un-acked reply counts against reliability
+    pub ack_timeout: Duration, // an un-acked reply counts against reliability
     // Request processing
     pub max_concurrent_requests: usize,
     pub cpu_workers: usize,
     pub request_queue_capacity: usize,
     // Metrics
     pub sample_every: Duration,
-    pub queue_cap: f64,         // queue length that counts as "fully loaded"
-    pub svc_cap_ms: f64,        // service time that counts as "fully slow"
-    pub rtt_cap_ms: f64,        // client RTT that counts as "fully bad"
+    pub queue_cap: f64,  // queue length that counts as "fully loaded"
+    pub svc_cap_ms: f64, // service time that counts as "fully slow"
+    pub rtt_cap_ms: f64, // client RTT that counts as "fully bad"
     pub disk_cap_bps: f64,
     pub net_cap_bps: f64,
     pub w: Weights,
@@ -69,10 +68,16 @@ pub struct Config {
 }
 
 fn env_u(k: &str, d: u64) -> u64 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn env_f(k: &str, d: f64) -> f64 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn env_ms(k: &str, d: u64) -> Duration {
     Duration::from_millis(env_u(k, d).max(1))
@@ -121,8 +126,6 @@ impl Config {
     }
 }
 
-
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Machine {
     pub cpu: f64, // [0-1] smoothed utilisation
@@ -138,7 +141,11 @@ pub struct ClientStats {
 }
 impl Default for ClientStats {
     fn default() -> Self {
-        ClientStats { rtt_ms: 1.0, reliability: 1.0, samples: 0 }
+        ClientStats {
+            rtt_ms: 1.0,
+            reliability: 1.0,
+            samples: 0,
+        }
     }
 }
 
@@ -163,7 +170,9 @@ impl Metrics {
         self.queue.fetch_add(1, Relaxed);
     }
     pub fn queue_dec(&self) {
-        let _ = self.queue.try_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
+        let _ = self
+            .queue
+            .try_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
     }
     pub fn queue_len(&self) -> u32 {
         self.queue.load(Relaxed) + self.queue_extra.load(Relaxed)
@@ -192,12 +201,21 @@ impl Metrics {
 
     // Per-client communication stats (fed by client Ack messages)
     pub fn client(&self, client: &str) -> ClientStats {
-        self.clients.lock().unwrap().get(client).copied().unwrap_or_default()
+        self.clients
+            .lock()
+            .unwrap()
+            .get(client)
+            .copied()
+            .unwrap_or_default()
     }
     pub fn record_ack(&self, client: &str, rtt_ms: f64) {
         let mut m = self.clients.lock().unwrap();
         let c = m.entry(client.to_string()).or_default();
-        c.rtt_ms = if c.samples == 0 { rtt_ms } else { 0.2 * rtt_ms + 0.8 * c.rtt_ms };
+        c.rtt_ms = if c.samples == 0 {
+            rtt_ms
+        } else {
+            0.2 * rtt_ms + 0.8 * c.rtt_ms
+        };
         c.reliability = 0.1 + 0.9 * c.reliability;
         c.samples += 1;
     }
@@ -215,8 +233,11 @@ impl Metrics {
         let cpu = m.cpu.clamp(0.0, 1.0);
         let queue = (self.queue_len() as f64 / cfg.queue_cap).min(1.0);
         let measured_svc = self.svc_ms();
-        let svc = (if measured_svc == 0.0 { cfg.svc_cap_ms * 0.5 } else { measured_svc }
-            / cfg.svc_cap_ms)
+        let svc = (if measured_svc == 0.0 {
+            cfg.svc_cap_ms * 0.5
+        } else {
+            measured_svc
+        } / cfg.svc_cap_ms)
             .min(1.0);
         let rtt = (cs.rtt_ms / cfg.rtt_cap_ms).min(1.0);
         let s = match cfg.policy {
@@ -238,7 +259,12 @@ impl Metrics {
             Policy::QueueOnly => queue,
             Policy::CpuOnly => cpu,
             Policy::Random => {
-                (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos() % 10_000) as f64 / 10_000.0
+                (SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos()
+                    % 10_000) as f64
+                    / 10_000.0
             }
         };
         (s * 10_000.0) as u64
@@ -248,7 +274,11 @@ impl Metrics {
         let m = self.machine();
         format!(
             "cpu={:.2} mem={:.2} io={:.2} queue={} svc_ms={:.0}",
-            m.cpu, m.mem, m.io, self.queue_len(), self.svc_ms()
+            m.cpu,
+            m.mem,
+            m.io,
+            self.queue_len(),
+            self.svc_ms()
         )
     }
 
@@ -309,7 +339,13 @@ impl Metrics {
 
 fn read_cpu() -> Option<(u64, u64)> {
     let s = fs::read_to_string("/proc/stat").ok()?;
-    let v: Vec<u64> = s.lines().next()?.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+    let v: Vec<u64> = s
+        .lines()
+        .next()?
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|x| x.parse().ok())
+        .collect();
     if v.len() < 8 {
         return None;
     }
@@ -321,7 +357,12 @@ fn read_cpu() -> Option<(u64, u64)> {
 fn read_mem() -> Option<f64> {
     let s = fs::read_to_string("/proc/meminfo").ok()?;
     let get = |k: &str| -> Option<f64> {
-        s.lines().find(|l| l.starts_with(k))?.split_whitespace().nth(1)?.parse().ok()
+        s.lines()
+            .find(|l| l.starts_with(k))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()
     };
     let (total, avail) = (get("MemTotal:")?, get("MemAvailable:")?);
     Some(1.0 - avail / total)
@@ -337,7 +378,11 @@ fn read_disk() -> Option<u64> {
         }
         let name = f[2];
         // Whole disks only: they have an entry in /sys/block, partitions do not.
-        if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") || name.starts_with("md") {
+        if name.starts_with("loop")
+            || name.starts_with("ram")
+            || name.starts_with("dm-")
+            || name.starts_with("md")
+        {
             continue;
         }
         if !Path::new("/sys/block").join(name).exists() {
@@ -358,17 +403,16 @@ fn read_net() -> Option<u64> {
         if iface.trim() == "lo" {
             continue;
         }
-        let f: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        let f: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
         if f.len() >= 9 {
             bytes += f[0] + f[8]; // rx_bytes + tx_bytes
         }
     }
     Some(bytes)
 }
-
-
-
-
 
 pub const NO_WINNER: NodeId = NodeId::MAX;
 
@@ -433,7 +477,6 @@ pub async fn wait_for<F: Fn() -> bool>(notify: &Notify, timeout: Duration, cond:
     }
 }
 
-
 struct Round {
     my_score: u64,
     got_ok: bool,
@@ -454,7 +497,13 @@ impl LoadAwareBully {
     }
 
     /// Run `f` on the round for `key`, creating it (with a score snapshot) if needed.
-    fn with_round<T>(&self, node: &Node, key: &(String, u32), client: &str, f: impl FnOnce(&mut Round) -> T) -> T {
+    fn with_round<T>(
+        &self,
+        node: &Node,
+        key: &(String, u32),
+        client: &str,
+        f: impl FnOnce(&mut Round) -> T,
+    ) -> T {
         let mut m = self.rounds.lock().unwrap();
         let r = m.entry(key.clone()).or_insert_with(|| Round {
             my_score: node.score_for(client),
@@ -473,7 +522,6 @@ impl LoadAwareBully {
             .unwrap()
             .retain(|_, round| now.duration_since(round.last_touched) <= retention);
     }
-
 }
 
 const SCORE_BUCKET_WIDTH: u64 = 101;
@@ -528,7 +576,8 @@ impl ElectionStrategy for LoadAwareBully {
 
     async fn elect(&self, node: &Arc<Node>, req_id: &str, client: &str, attempt: u32) -> Outcome {
         let start = Instant::now();
-        let (t_ok, t_coord, max_restarts) = (node.cfg.t_ok, node.cfg.t_coord, node.cfg.max_restarts);
+        let (t_ok, t_coord, max_restarts) =
+            (node.cfg.t_ok, node.cfg.t_coord, node.cfg.max_restarts);
         self.prune_expired(ROUND_RETENTION);
         let key = (req_id.to_string(), attempt);
         let my_score = self.with_round(node, &key, client, |r| {
@@ -536,7 +585,13 @@ impl ElectionStrategy for LoadAwareBully {
             r.coordinator = None;
             r.my_score
         });
-        let done = |w: NodeId, complete: bool| Outcome { winner: w, attempt, elapsed: start.elapsed(), my_score, complete };
+        let done = |w: NodeId, complete: bool| Outcome {
+            winner: w,
+            attempt,
+            elapsed: start.elapsed(),
+            my_score,
+            complete,
+        };
         let retry_interval = (t_ok / 3).max(Duration::from_millis(1));
 
         // A node that just (re)started or rejoined has not yet re-learned who is alive and has not synced its state, so it must not win (it could act on stale data,
@@ -547,7 +602,9 @@ impl ElectionStrategy for LoadAwareBully {
                 m.get(&k).map_or(false, |r| r.coordinator.is_some())
             })
             .await;
-            let w = self.with_round(node, &key, client, |r| r.coordinator).unwrap_or(NO_WINNER);
+            let w = self
+                .with_round(node, &key, client, |r| r.coordinator)
+                .unwrap_or(NO_WINNER);
             return done(w, w != NO_WINNER);
         }
 
@@ -575,7 +632,8 @@ impl ElectionStrategy for LoadAwareBully {
             let k = key.clone();
             wait_for(&self.notify, t_ok, || {
                 let m = self.rounds.lock().unwrap();
-                m.get(&k).map_or(false, |r| r.got_ok || r.coordinator.is_some())
+                m.get(&k)
+                    .map_or(false, |r| r.got_ok || r.coordinator.is_some())
             })
             .await;
             if let Some(w) = self.with_round(node, &key, client, |r| r.coordinator) {
@@ -620,7 +678,11 @@ impl ElectionStrategy for LoadAwareBully {
         if !declared {
             return done(winner, winner != NO_WINNER);
         }
-        let coordinator = Msg::Coordinator { req_id: req_id.into(), attempt, winner: node.id };
+        let coordinator = Msg::Coordinator {
+            req_id: req_id.into(),
+            attempt,
+            winner: node.id,
+        };
         node.broadcast(&coordinator).await;
         schedule_broadcast_retries(node, coordinator, retry_interval);
         done(node.id, true)
@@ -629,7 +691,13 @@ impl ElectionStrategy for LoadAwareBully {
     async fn on_message(&self, node: &Arc<Node>, msg: Msg) {
         self.prune_expired(ROUND_RETENTION);
         match msg {
-            Msg::Election { req_id, attempt, from, score, client: _ } => {
+            Msg::Election {
+                req_id,
+                attempt,
+                from,
+                score,
+                client: _,
+            } => {
                 if !node.is_ready() {
                     return; //
                 }
@@ -643,12 +711,23 @@ impl ElectionStrategy for LoadAwareBully {
                     round.my_score
                 };
                 if outranks(&req_id, my_score, node.id, score, from) {
-                    let ok = Msg::Ok { req_id, attempt, from: node.id };
+                    let ok = Msg::Ok {
+                        req_id,
+                        attempt,
+                        from: node.id,
+                    };
                     node.send_to(from, &ok).await;
-                    schedule_send_retries(node, from, ok, (node.cfg.t_ok / 3).max(Duration::from_millis(1)));
+                    schedule_send_retries(
+                        node,
+                        from,
+                        ok,
+                        (node.cfg.t_ok / 3).max(Duration::from_millis(1)),
+                    );
                 }
             }
-            Msg::Ok { req_id, attempt, .. } => {
+            Msg::Ok {
+                req_id, attempt, ..
+            } => {
                 let key = (req_id, attempt);
                 let updated = {
                     let mut rounds = self.rounds.lock().unwrap();
@@ -664,7 +743,11 @@ impl ElectionStrategy for LoadAwareBully {
                     self.notify.notify_waiters();
                 }
             }
-            Msg::Coordinator { req_id, attempt, winner } => {
+            Msg::Coordinator {
+                req_id,
+                attempt,
+                winner,
+            } => {
                 let key = (req_id.clone(), attempt);
                 let prev = {
                     let mut rounds = self.rounds.lock().unwrap();
@@ -673,7 +756,8 @@ impl ElectionStrategy for LoadAwareBully {
                     };
                     round.last_touched = Instant::now();
                     let previous = round.coordinator;
-                    round.coordinator = Some(previous.map_or(winner, |current| current.min(winner)));
+                    round.coordinator =
+                        Some(previous.map_or(winner, |current| current.min(winner)));
                     previous
                 };
                 if let Some(first) = prev {
