@@ -1023,7 +1023,7 @@ impl Node {
         self.max_active_requests.fetch_max(active, Relaxed);
         let _active_guard = ActiveRequestGuard(&self.active_requests);
         let mut reply_ready = false;
-        let mut under_replicated = false;
+        let mut plan_under_replicated = false;
         for attempt in 0..self.cfg.max_attempts {
             if self.is_muted() || self.plans.lock().unwrap().contains_key(&id) {
                 break;
@@ -1079,7 +1079,7 @@ impl Node {
                     self.under_replicated.fetch_add(1, Relaxed);
                 }
                 reply_ready = true;
-                under_replicated = !replicated;
+                plan_under_replicated = !replicated;
                 println!(
                     "REQUEST,{},{},{},{},{}",
                     id,
@@ -1129,9 +1129,9 @@ impl Node {
             .unwrap_or_default();
         let completed_plan = self.plans.lock().unwrap().get(&id).cloned();
         if reply_ready {
-            if let Some((plan, under_replicated)) = completed_plan {
+            if let Some((plan, _)) = completed_plan {
                 for (to, client) in waiters {
-                    self.send_reply(to, &plan, under_replicated, &client).await;
+                    self.send_reply(to, &plan, plan_under_replicated, &client).await;
                 }
             }
         } else if completed_plan.is_none() {

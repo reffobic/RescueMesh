@@ -163,7 +163,7 @@ impl Metrics {
         self.queue.fetch_add(1, Relaxed);
     }
     pub fn queue_dec(&self) {
-        let _ = self.queue.fetch_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
+        let _ = self.queue.try_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
     }
     pub fn queue_len(&self) -> u32 {
         self.queue.load(Relaxed) + self.queue_extra.load(Relaxed)
