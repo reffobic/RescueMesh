@@ -29,7 +29,6 @@ use std::{
 };
 use tokio::{sync::Notify, time::sleep};
 
-
 // ============================================================================
 // 1. CONFIG
 // ============================================================================
@@ -58,10 +57,10 @@ pub struct Weights {
 #[derive(Clone, Debug)]
 pub struct Config {
     // --- election (Bully) ---
-    pub t_ok: Duration,        // wait for OK after ELECTION ("election acknowledgment")
-    pub t_coord: Duration,     // wait for COORDINATOR after getting an OK
-    pub max_restarts: u32,     // restarts inside one election round
-    pub max_attempts: u32,     // re-elections after the winner failed to finish
+    pub t_ok: Duration, // wait for OK after ELECTION ("election acknowledgment")
+    pub t_coord: Duration, // wait for COORDINATOR after getting an OK
+    pub max_restarts: u32, // restarts inside one election round
+    pub max_attempts: u32, // re-elections after the winner failed to finish
     // --- failure detection / execution ---
     pub heartbeat: Duration,
     pub fail_after: Duration,
@@ -70,12 +69,16 @@ pub struct Config {
     pub repl_timeout: Duration, // give up waiting for quorum after this
     pub repl_retry: Duration,   // resend Replicate to un-acked peers this often
     // --- client feedback ---
-    pub ack_timeout: Duration,  // an un-acked reply counts against reliability
+    pub ack_timeout: Duration, // an un-acked reply counts against reliability
+    // --- request processing ---
+    pub max_concurrent_requests: usize,
+    pub cpu_workers: usize,
+    pub request_queue_capacity: usize,
     // --- metrics ---
     pub sample_every: Duration,
-    pub queue_cap: f64,         // queue length that counts as "fully loaded"
-    pub svc_cap_ms: f64,        // service time that counts as "fully slow"
-    pub rtt_cap_ms: f64,        // client RTT that counts as "fully bad"
+    pub queue_cap: f64,  // queue length that counts as "fully loaded"
+    pub svc_cap_ms: f64, // service time that counts as "fully slow"
+    pub rtt_cap_ms: f64, // client RTT that counts as "fully bad"
     pub disk_cap_bps: f64,
     pub net_cap_bps: f64,
     pub w: Weights,
@@ -83,10 +86,16 @@ pub struct Config {
 }
 
 fn env_u(k: &str, d: u64) -> u64 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn env_f(k: &str, d: f64) -> f64 {
-    std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(d)
 }
 fn env_ms(k: &str, d: u64) -> Duration {
     Duration::from_millis(env_u(k, d))
@@ -105,6 +114,9 @@ impl Config {
             repl_timeout: env_ms("RM_REPL_TIMEOUT_MS", 1500),
             repl_retry: env_ms("RM_REPL_RETRY_MS", 150),
             ack_timeout: env_ms("RM_ACK_TIMEOUT_MS", 2000),
+            max_concurrent_requests: env_u("RM_NODE_MAX_IN_FLIGHT", 32).max(1) as usize,
+            cpu_workers: env_u("RM_CPU_WORKERS", 4).max(1) as usize,
+            request_queue_capacity: env_u("RM_REQUEST_QUEUE_CAPACITY", 128).max(1) as usize,
             sample_every: env_ms("RM_SAMPLE_MS", 500),
             queue_cap: env_f("RM_QUEUE_CAP", 20.0),
             svc_cap_ms: env_f("RM_SVC_CAP_MS", 2000.0),
@@ -149,7 +161,11 @@ pub struct ClientStats {
 }
 impl Default for ClientStats {
     fn default() -> Self {
-        ClientStats { rtt_ms: 1.0, reliability: 1.0, samples: 0 }
+        ClientStats {
+            rtt_ms: 1.0,
+            reliability: 1.0,
+            samples: 0,
+        }
     }
 }
 
@@ -174,7 +190,9 @@ impl Metrics {
         self.queue.fetch_add(1, Relaxed);
     }
     pub fn queue_dec(&self) {
-        let _ = self.queue.fetch_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
+        let _ = self
+            .queue
+            .fetch_update(Relaxed, Relaxed, |q| Some(q.saturating_sub(1)));
     }
     pub fn queue_len(&self) -> u32 {
         self.queue.load(Relaxed) + self.queue_extra.load(Relaxed)
@@ -203,12 +221,21 @@ impl Metrics {
 
     // ---- per-client communication stats (fed by client Ack messages) ----
     pub fn client(&self, client: &str) -> ClientStats {
-        self.clients.lock().unwrap().get(client).copied().unwrap_or_default()
+        self.clients
+            .lock()
+            .unwrap()
+            .get(client)
+            .copied()
+            .unwrap_or_default()
     }
     pub fn record_ack(&self, client: &str, rtt_ms: f64) {
         let mut m = self.clients.lock().unwrap();
         let c = m.entry(client.to_string()).or_default();
-        c.rtt_ms = if c.samples == 0 { rtt_ms } else { 0.2 * rtt_ms + 0.8 * c.rtt_ms };
+        c.rtt_ms = if c.samples == 0 {
+            rtt_ms
+        } else {
+            0.2 * rtt_ms + 0.8 * c.rtt_ms
+        };
         c.reliability = 0.1 + 0.9 * c.reliability;
         c.samples += 1;
     }
@@ -246,7 +273,12 @@ impl Metrics {
             Policy::QueueOnly => queue,
             Policy::CpuOnly => cpu,
             Policy::Random => {
-                (SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos() % 10_000) as f64 / 10_000.0
+                (SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos()
+                    % 10_000) as f64
+                    / 10_000.0
             }
         };
         (s * 10_000.0) as u64
@@ -256,7 +288,11 @@ impl Metrics {
         let m = self.machine();
         format!(
             "cpu={:.2} mem={:.2} io={:.2} queue={} svc_ms={:.0}",
-            m.cpu, m.mem, m.io, self.queue_len(), self.svc_ms()
+            m.cpu,
+            m.mem,
+            m.io,
+            self.queue_len(),
+            self.svc_ms()
         )
     }
 
@@ -300,7 +336,13 @@ impl Metrics {
 
 fn read_cpu() -> Option<(u64, u64)> {
     let s = fs::read_to_string("/proc/stat").ok()?;
-    let v: Vec<u64> = s.lines().next()?.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+    let v: Vec<u64> = s
+        .lines()
+        .next()?
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|x| x.parse().ok())
+        .collect();
     if v.len() < 8 {
         return None;
     }
@@ -312,7 +354,12 @@ fn read_cpu() -> Option<(u64, u64)> {
 fn read_mem() -> Option<f64> {
     let s = fs::read_to_string("/proc/meminfo").ok()?;
     let get = |k: &str| -> Option<f64> {
-        s.lines().find(|l| l.starts_with(k))?.split_whitespace().nth(1)?.parse().ok()
+        s.lines()
+            .find(|l| l.starts_with(k))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()
     };
     let (total, avail) = (get("MemTotal:")?, get("MemAvailable:")?);
     Some(1.0 - avail / total)
@@ -328,7 +375,11 @@ fn read_disk() -> Option<u64> {
         }
         let name = f[2];
         // Whole disks only: they have an entry in /sys/block, partitions do not.
-        if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") || name.starts_with("md") {
+        if name.starts_with("loop")
+            || name.starts_with("ram")
+            || name.starts_with("dm-")
+            || name.starts_with("md")
+        {
             continue;
         }
         if !Path::new("/sys/block").join(name).exists() {
@@ -349,7 +400,10 @@ fn read_net() -> Option<u64> {
         if iface.trim() == "lo" {
             continue;
         }
-        let f: Vec<u64> = rest.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+        let f: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
         if f.len() >= 9 {
             bytes += f[0] + f[8]; // rx_bytes + tx_bytes
         }
@@ -428,7 +482,13 @@ impl LoadAwareBully {
     }
 
     /// Run `f` on the round for `key`, creating it (with a score snapshot) if needed.
-    fn with_round<T>(&self, node: &Node, key: &(String, u32), client: &str, f: impl FnOnce(&mut Round) -> T) -> T {
+    fn with_round<T>(
+        &self,
+        node: &Node,
+        key: &(String, u32),
+        client: &str,
+        f: impl FnOnce(&mut Round) -> T,
+    ) -> T {
         let mut m = self.rounds.lock().unwrap();
         let r = m.entry(key.clone()).or_insert_with(|| Round {
             my_score: node.score_for(client),
@@ -447,10 +507,16 @@ impl ElectionStrategy for LoadAwareBully {
 
     async fn elect(&self, node: &Arc<Node>, req_id: &str, client: &str, attempt: u32) -> Outcome {
         let start = Instant::now();
-        let (t_ok, t_coord, max_restarts) = (node.cfg.t_ok, node.cfg.t_coord, node.cfg.max_restarts);
+        let (t_ok, t_coord, max_restarts) =
+            (node.cfg.t_ok, node.cfg.t_coord, node.cfg.max_restarts);
         let key = (req_id.to_string(), attempt);
         let my_score = self.with_round(node, &key, client, |r| r.my_score);
-        let done = |w: NodeId, complete: bool| Outcome { winner: w, elapsed: start.elapsed(), my_score, complete };
+        let done = |w: NodeId, complete: bool| Outcome {
+            winner: w,
+            elapsed: start.elapsed(),
+            my_score,
+            complete,
+        };
 
         for _ in 0..max_restarts {
             // A COORDINATOR announcement may already have arrived.
@@ -474,7 +540,8 @@ impl ElectionStrategy for LoadAwareBully {
             let k = key.clone();
             wait_for(&self.notify, t_ok, || {
                 let m = self.rounds.lock().unwrap();
-                m.get(&k).map_or(false, |r| r.got_ok || r.coordinator.is_some())
+                m.get(&k)
+                    .map_or(false, |r| r.got_ok || r.coordinator.is_some())
             })
             .await;
             if let Some(w) = self.with_round(node, &key, client, |r| r.coordinator) {
@@ -501,26 +568,53 @@ impl ElectionStrategy for LoadAwareBully {
         // exist (split decision); duplicate execution is harmless (request_id idempotency).
         let exhausted = self.with_round(node, &key, client, |r| r.got_ok);
         self.with_round(node, &key, client, |r| r.coordinator = Some(node.id));
-        node.broadcast(&Msg::Coordinator { req_id: req_id.into(), attempt, winner: node.id }).await;
+        node.broadcast(&Msg::Coordinator {
+            req_id: req_id.into(),
+            attempt,
+            winner: node.id,
+        })
+        .await;
         done(node.id, !exhausted)
     }
 
     async fn on_message(&self, node: &Arc<Node>, msg: Msg) {
         match msg {
-            Msg::Election { req_id, attempt, from, score, client } => {
+            Msg::Election {
+                req_id,
+                attempt,
+                from,
+                score,
+                client,
+            } => {
                 let key = (req_id.clone(), attempt);
                 let my_score = self.with_round(node, &key, &client, |r| r.my_score);
                 // I outrank the sender iff my (score, id) is smaller.
                 if (my_score, node.id) < (score, from) {
-                    node.send_to(from, &Msg::Ok { req_id, attempt, from: node.id }).await;
+                    node.send_to(
+                        from,
+                        &Msg::Ok {
+                            req_id,
+                            attempt,
+                            from: node.id,
+                        },
+                    )
+                    .await;
                 }
             }
-            Msg::Ok { req_id, attempt, .. } => {
+            Msg::Ok {
+                req_id, attempt, ..
+            } => {
                 self.with_round(node, &(req_id, attempt), "", |r| r.got_ok = true);
                 self.notify.notify_waiters();
             }
-            Msg::Coordinator { req_id, attempt, winner } => {
-                self.with_round(node, &(req_id, attempt), "", |r| r.coordinator = Some(winner));
+            Msg::Coordinator {
+                req_id,
+                attempt,
+                winner,
+            } => {
+                self.with_round(node, &(req_id, attempt), "", |r| {
+                    r.coordinator = Some(winner)
+                });
                 self.notify.notify_waiters();
             }
             _ => {}
