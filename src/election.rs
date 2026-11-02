@@ -234,7 +234,7 @@ impl Metrics {
         let queue = (self.queue_len() as f64 / cfg.queue_cap).min(1.0);
         let measured_svc = self.svc_ms();
         let svc = (if measured_svc == 0.0 {
-            cfg.svc_cap_ms * 0.5
+            cfg.svc_cap_ms * 0.3
         } else {
             measured_svc
         } / cfg.svc_cap_ms)
