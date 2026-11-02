@@ -574,8 +574,10 @@ impl Node {
             .find(|(i, _)| *i == id)
             .expect("my id not in peer list")
             .1;
-        let bind_fallback =
-            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
+        let bind_fallback = SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            addr.port(),
+        );
         let sock = match UdpSocket::bind(addr).await {
             Ok(sock) => sock,
             Err(_) => UdpSocket::bind(bind_fallback)
@@ -873,7 +875,14 @@ impl Node {
         });
         let dispatch_node = self.clone();
         tokio::spawn(async move {
-            while let Some((msg, _source)) = incoming_rx.recv().await {
+            while let Some((msg, source)) = incoming_rx.recv().await {
+                let msg = match msg {
+                    Msg::Request { req, .. } => Msg::Request {
+                        req,
+                        reply_to: source,
+                    },
+                    other => other,
+                };
                 dispatch_node.handle(msg).await;
             }
         });

@@ -273,32 +273,31 @@ async fn submit_request(
         IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
     };
-    let route_socket = std::net::UdpSocket::bind(bind_addr)
-        .map_err(|error| format!("bind client route-discovery socket: {error}"))?;
-    route_socket
-        .connect(config.node_addresses[0])
-        .map_err(|error| format!("select client network route: {error}"))?;
-    let client_ip = route_socket
-        .local_addr()
-        .map_err(|error| format!("read client route: {error}"))?
-        .ip();
-    drop(route_socket);
-    let socket = UdpSocket::bind(SocketAddr::new(client_ip, 0))
+    let socket = UdpSocket::bind(bind_addr)
         .await
         .map_err(|error| format!("bind client socket: {error}"))?;
-    let reply_to = socket
+    let local_port = socket
         .local_addr()
-        .map_err(|error| format!("read client socket address: {error}"))?;
-    let bytes = serde_json::to_vec(&Msg::Request {
-        req: req.clone(),
-        reply_to,
-    })
-    .map_err(|error| format!("serialize request: {error}"))?;
-    for address in &config.node_addresses {
-        socket
-            .send_to(&bytes, address)
-            .await
-            .map_err(|error| format!("send request to {address}: {error}"))?;
+        .map_err(|error| format!("read client socket address: {error}"))?
+        .port();
+    let mut packets = Vec::with_capacity(config.node_addresses.len());
+    for &address in &config.node_addresses {
+        let client_ip = std::net::UdpSocket::bind(bind_addr)
+            .and_then(|s| {
+                s.connect(address)?;
+                Ok(s.local_addr()?.ip())
+            })
+            .unwrap_or_else(|_| bind_addr.ip());
+        let reply_to = SocketAddr::new(client_ip, local_port);
+        let bytes = serde_json::to_vec(&Msg::Request {
+            req: req.clone(),
+            reply_to,
+        })
+        .map_err(|error| format!("serialize request: {error}"))?;
+        packets.push((address, bytes));
+    }
+    for (address, bytes) in &packets {
+        let _ = socket.send_to(bytes, address).await;
     }
 
     const MAX_RESENDS: usize = 4;
@@ -326,8 +325,8 @@ async fn submit_request(
                 if Instant::now() < deadline && resends < MAX_RESENDS {
                     resends += 1;
                     busy_nodes = 0;
-                    for address in &config.node_addresses {
-                        let _ = socket.send_to(&bytes, address).await;
+                    for (address, bytes) in &packets {
+                        let _ = socket.send_to(bytes, address).await;
                     }
                     continue;
                 }
