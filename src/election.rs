@@ -53,6 +53,10 @@ pub struct Config {
     pub repl_retry: Duration,   // resend Replicate to un-acked peers this often
     // Client Feedback
     pub ack_timeout: Duration,  // an un-acked reply counts against reliability
+    // Request processing
+    pub max_concurrent_requests: usize,
+    pub cpu_workers: usize,
+    pub request_queue_capacity: usize,
     // Metrics
     pub sample_every: Duration,
     pub queue_cap: f64,         // queue length that counts as "fully loaded"
@@ -89,6 +93,9 @@ impl Config {
             repl_timeout: env_ms("RM_REPL_TIMEOUT_MS", 1500),
             repl_retry: env_ms("RM_REPL_RETRY_MS", 150),
             ack_timeout: env_ms("RM_ACK_TIMEOUT_MS", 2000),
+            max_concurrent_requests: env_u("RM_NODE_MAX_IN_FLIGHT", 32).max(1) as usize,
+            cpu_workers: env_u("RM_CPU_WORKERS", 4).max(1) as usize,
+            request_queue_capacity: env_u("RM_REQUEST_QUEUE_CAPACITY", 128).max(1) as usize,
             sample_every: env_ms("RM_SAMPLE_MS", 500),
             queue_cap: env_f("RM_QUEUE_CAP", 20.0),
             svc_cap_ms: env_f("RM_SVC_CAP_MS", 2000.0),
