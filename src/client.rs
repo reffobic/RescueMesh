@@ -301,7 +301,10 @@ async fn submit_request(
             .map_err(|error| format!("send request to {address}: {error}"))?;
     }
 
+    const MAX_RESENDS: usize = 4;
+    const RESEND_INTERVAL: Duration = Duration::from_millis(1000);
     let deadline = Instant::now() + config.request_timeout;
+    let mut resends = 0usize;
     let mut busy_nodes = 0;
     let mut buf = vec![0u8; 16384];
     loop {
@@ -309,11 +312,27 @@ async fn submit_request(
         if remaining.is_zero() {
             return Err("request timed out".into());
         }
-        let (size, source) = match tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await
+        let wait_slice = if resends < MAX_RESENDS {
+            remaining.min(RESEND_INTERVAL)
+        } else {
+            remaining
+        };
+        let (size, source) = match tokio::time::timeout(wait_slice, socket.recv_from(&mut buf)).await
         {
             Ok(Ok(response)) => response,
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => continue,
             Ok(Err(error)) => return Err(format!("receive response: {error}")),
-            Err(_) => return Err("request timed out".into()),
+            Err(_) => {
+                if Instant::now() < deadline && resends < MAX_RESENDS {
+                    resends += 1;
+                    busy_nodes = 0;
+                    for address in &config.node_addresses {
+                        let _ = socket.send_to(&bytes, address).await;
+                    }
+                    continue;
+                }
+                return Err("request timed out".into());
+            }
         };
         let message = match serde_json::from_slice::<Msg>(&buf[..size]) {
             Ok(message) => message,
