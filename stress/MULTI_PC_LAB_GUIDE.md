@@ -210,16 +210,22 @@ You should see a `CLIENT_METRICS,...` line with `succeeded=1` (or close).
 
 ---
 
-## 3. Client PCs (PC4–PC6)
+## 3. Client PCs (PC4–PC6) — commands in order
 
-Do **not** set `RM_NODE_ID` on clients (only `RM_NODES`).
+Start **PC1–PC3 nodes first**. Do **not** set `RM_NODE_ID` on clients (only `RM_NODES`).
 
-### Smoke test (one request) — each client PC
+**Pass (smoke):** `CLIENT_METRICS,...succeeded=1...` (and not all `timed_out`).  
+**Order:** smoke on PC4 → then smoke PC5/PC6 → then run the load block on PC4/5/6 together for multi-PC stress.
+
+### PC4 — `10.40.1.240`
+
+**Smoke:**
 
 ```bash
-cd RescueMesh
-source stress/lab/nodes.env
-export RM_CLIENT_ID="pc4-smoke"   # change per PC: pc5-smoke / pc6-smoke
+cd ~/Projects/RescueMesh
+hostname -I
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_CLIENT_ID=pc4
 export RM_CLIENT_USERS=1
 export RM_CLIENT_REQUESTS_PER_USER=1
 export RM_CLIENT_MAX_IN_FLIGHT=1
@@ -227,35 +233,69 @@ export RM_CLIENT_TIMEOUT_MS=5000
 cargo run --release -- client
 ```
 
-**Pass:** `succeeded=1`, `timed_out=0`, `per_node={…}` shows which cloud node processed it.
-
-### Concurrent clients on one PC
+**Load:**
 
 ```bash
-source stress/lab/nodes.env
-export RM_CLIENT_ID="pc4-load"
-export RM_CLIENT_USERS=20
-export RM_CLIENT_REQUESTS_PER_USER=10
-export RM_CLIENT_MAX_IN_FLIGHT=32
-export RM_CLIENT_TIMEOUT_MS=8000
-cargo run --release -- client 2>&1 | tee results/pc4_u20.txt
-```
-
-### All three client PCs at once (real multi-PC stress)
-
-On PC4, PC5, PC6 **at the same time**:
-
-```bash
-source stress/lab/nodes.env
-export RM_CLIENT_ID="pcX-$(hostname)"   # unique per machine
 export RM_CLIENT_USERS=15
 export RM_CLIENT_REQUESTS_PER_USER=20
 export RM_CLIENT_MAX_IN_FLIGHT=32
 export RM_CLIENT_TIMEOUT_MS=8000
-cargo run --release -- client 2>&1 | tee "results/$(hostname)_client.txt"
+cargo run --release -- client
 ```
 
-Total offered load ≈ `3 × users × requests_per_user` submissions.
+### PC5 — `10.40.39.134`
+
+**Smoke:**
+
+```bash
+cd ~/Projects/RescueMesh
+hostname -I
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_CLIENT_ID=pc5
+export RM_CLIENT_USERS=1
+export RM_CLIENT_REQUESTS_PER_USER=1
+export RM_CLIENT_MAX_IN_FLIGHT=1
+export RM_CLIENT_TIMEOUT_MS=5000
+cargo run --release -- client
+```
+
+**Load** (keep `RM_CLIENT_ID=pc5`):
+
+```bash
+export RM_CLIENT_USERS=15
+export RM_CLIENT_REQUESTS_PER_USER=20
+export RM_CLIENT_MAX_IN_FLIGHT=32
+export RM_CLIENT_TIMEOUT_MS=8000
+cargo run --release -- client
+```
+
+### PC6 — `10.40.5.45`
+
+**Smoke:**
+
+```bash
+cd ~/Projects/RescueMesh
+hostname -I
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_CLIENT_ID=pc6
+export RM_CLIENT_USERS=1
+export RM_CLIENT_REQUESTS_PER_USER=1
+export RM_CLIENT_MAX_IN_FLIGHT=1
+export RM_CLIENT_TIMEOUT_MS=5000
+cargo run --release -- client
+```
+
+**Load** (keep `RM_CLIENT_ID=pc6`):
+
+```bash
+export RM_CLIENT_USERS=15
+export RM_CLIENT_REQUESTS_PER_USER=20
+export RM_CLIENT_MAX_IN_FLIGHT=32
+export RM_CLIENT_TIMEOUT_MS=8000
+cargo run --release -- client
+```
+
+Total offered load when all three run the load block ≈ `3 × 15 × 20` submissions.
 
 ---
 
@@ -373,15 +413,30 @@ export RM_NODE_ID=3
 cargo run --release -- node
 ```
 
-### Clients
+### Clients (see §3 for full smoke → load per PC)
 
-**PC4 / PC5 / PC6** (change `RM_CLIENT_ID`):
+**PC4 (`10.40.1.240`) smoke:**
 ```bash
+cd ~/Projects/RescueMesh
+hostname -I
 export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_CLIENT_ID="pc4"
-export RM_CLIENT_USERS=10
-export RM_CLIENT_REQUESTS_PER_USER=10
+export RM_CLIENT_ID=pc4
+export RM_CLIENT_USERS=1
+export RM_CLIENT_REQUESTS_PER_USER=1
+export RM_CLIENT_MAX_IN_FLIGHT=1
+export RM_CLIENT_TIMEOUT_MS=5000
+cargo run --release -- client
+```
+
+**PC5:** same as PC4 with `export RM_CLIENT_ID=pc5`  
+**PC6:** same as PC4 with `export RM_CLIENT_ID=pc6`
+
+**Load (any client PC, after smoke):**
+```bash
+export RM_CLIENT_USERS=15
+export RM_CLIENT_REQUESTS_PER_USER=20
 export RM_CLIENT_MAX_IN_FLIGHT=32
+export RM_CLIENT_TIMEOUT_MS=8000
 cargo run --release -- client
 ```
 
