@@ -3,6 +3,8 @@
 //! Losers wait for the replicated plan and re-elect if the winner dies or stalls.
 
 use crate::election::{supersedes, wait_for, Config, ElectionStrategy, Metrics, NO_WINNER};
+use crate::planner::{self, PlannerParams};
+use crate::snapshot::{SnapshotParams, SnapshotSource, SyntheticSource};
 use crate::types::{IncidentRequest, ResponsePlan};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -158,6 +160,9 @@ pub struct Node {
     request_rx: Mutex<Option<mpsc::Receiver<QueuedRequest>>>,
     request_slots: Arc<Semaphore>,
     cpu_slots: Arc<Semaphore>,
+    snapshots: Arc<dyn SnapshotSource>, // Service 1 input; Phase 2 swaps in Discovery
+    planner_params: PlannerParams,
+    sim_delay: Duration, // optional simulated service time (RM_SIM_DELAY_MS, default 300)
     active_requests: AtomicU64,
     max_active_requests: AtomicU64,
     pub msgs_sent: AtomicU64,
@@ -610,6 +615,11 @@ impl Node {
             request_rx: Mutex::new(Some(request_rx)),
             request_slots,
             cpu_slots,
+            snapshots: Arc::new(SyntheticSource::new(&SnapshotParams::from_env())),
+            planner_params: PlannerParams::from_env(),
+            sim_delay: Duration::from_millis(
+                std::env::var("RM_SIM_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(300),
+            ),
             active_requests: AtomicU64::new(0),
             max_active_requests: AtomicU64::new(0),
             msgs_sent: AtomicU64::new(0),
@@ -1277,9 +1287,12 @@ impl Node {
         );
     }
 
-    /// Placeholder for Service 1 (priority + response plan). Replace with the real planner.
+    /// Service 1: priority + response plan. CPU-bound planning runs on the blocking pool,
+    /// bounded by `cpu_slots`; the snapshot is the (synthetic, seeded) world state.
     async fn execute(&self, req: IncidentRequest) -> Result<ResponsePlan, tokio::task::JoinError> {
-        sleep(Duration::from_millis(300)).await;
+        if !self.sim_delay.is_zero() {
+            sleep(self.sim_delay).await;
+        }
         let permit = self
             .cpu_slots
             .clone()
@@ -1287,22 +1300,15 @@ impl Node {
             .await
             .expect("CPU worker pool closed");
         let node_id = self.id;
+        let snap = self.snapshots.current();
+        let params = self.planner_params.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
-            let age_s = now.saturating_sub(req.timestamp_ms) as f64 / 1000.0;
-            ResponsePlan {
-                request_id: req.request_id,
-                incident_id: req.incident_id,
-                priority_score: req.severity as f64 * 10.0 + age_s.min(600.0) * 0.1,
-                assigned_responders: vec![],
-                assigned_resources: vec![],
-                recommended_route: vec![req.location_zone],
-                processed_by_node: node_id,
-            }
+            planner::plan(&req, &snap, &params, now, node_id).0
         })
         .await
     }
