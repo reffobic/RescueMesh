@@ -131,6 +131,36 @@ python3 stress/lab/verify_ips.py
 
 Open a terminal **on each cloud PC**. Keep them running.
 
+### Wrong vs right start (read this once)
+
+**Wrong** — looks like it works but never joins the lab cluster:
+
+```bash
+cargo build --release
+cargo run --release --          # no mode, no env → node 1 on 127.0.0.1 only
+```
+
+Typical bad output:
+
+```text
+RescueMesh node 1 listening; ready=false alive=[1] ...
+[node 1] warmup: no peer heard, serving alone
+```
+
+That means `RM_NODES` fell back to `1@127.0.0.1:7001,2@127.0.0.1:7002,3@127.0.0.1:7003` and `RM_NODE_ID` defaulted to `1`. Peers on other PCs are invisible.
+
+**Right** — always export peers + this PC’s id, then pass `node`:
+
+```bash
+hostname -I                     # match IP → node id in the table below
+source stress/lab/nodes.env     # sets RM_NODES to the three lab IPs
+export RM_NODE_ID=1             # 1 / 2 / 3 for PC1 / PC2 / PC3
+cargo run --release -- node
+# or: bash stress/lab/start_node.sh 1
+```
+
+Dead-code compiler **warnings** (`sim_load`, `FaultToleranceManager`, …) are normal on this branch — ignore them if `Finished release` appears.
+
 ### PC1 — `10.40.32.242`
 
 ```bash
@@ -140,7 +170,8 @@ export RM_NODE_ID=1
 cargo run --release -- node
 ```
 
-Expect something like: `RescueMesh node 1 listening; …`
+Expect something like: `RescueMesh node 1 listening; …`  
+After PC2 and PC3 are up with the same `RM_NODES`, `alive` should list more than `[1]` (not stuck on `serving alone` forever).
 
 ### PC2 — `10.40.2.29`
 
@@ -290,12 +321,15 @@ Election/planner knobs (optional): see `election::Config::from_env` / planner (`
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
+| `alive=[1]` / `warmup: no peer heard, serving alone` | Ran `cargo run --release --` **without** `RM_NODES` / `RM_NODE_ID` (defaults to localhost) | `Ctrl+C`, `source stress/lab/nodes.env`, set `RM_NODE_ID`, run `cargo run --release -- node` |
 | Client all timeouts | Firewall / wrong IP / nodes not running | `hostname -I`, ufw, verify `RM_NODES` |
 | Only one node “wins” forever | Others not reachable or wrong `RM_NODE_ID` | Fix IDs; check peer logs |
 | `bind` errors | Port in use / binding wrong IP | Kill old process; code falls back to `0.0.0.0` |
 | Duplicate node id | Two PCs with `RM_NODE_ID=1` | Set 1/2/3 correctly |
+| Many `warning: … never used` at build | Unused FT/election stubs on this branch | Safe to ignore if build finishes |
 | Build fails | Old Rust | `rustup update` |
 | Windows clients | `source` / bash | Use Git Bash, WSL, or set env in PowerShell (see below) |
+| `stress/lab/nodes.env: No such file` | Wrong branch / not pulled | `git fetch && git checkout stress-testing-lab` (after push) |
 
 ### PowerShell (Windows) equivalent
 
