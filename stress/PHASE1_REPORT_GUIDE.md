@@ -37,6 +37,146 @@ source stress/lab/nodes.env
 python3 stress/lab/check_connectivity.py
 ```
 
+### PC roles
+
+| PC | IP (default lab) | Role |
+|----|------------------|------|
+| PC1 | `10.40.32.242` | Cloud node **1** |
+| PC2 | `10.40.2.29` | Cloud node **2** |
+| PC3 | `10.40.0.73` | Cloud node **3** |
+| PC4 | (client) | Run all `run_phase1_suite.py` commands |
+| PC5–6 | (optional) | Extra clients only — **not** required for E1–E5 scripts |
+
+---
+
+## Exact commands by PC (after E1 — do E2 → E4/E5 → election → check)
+
+Assume E1 is done. Keep **PC2 + PC3** nodes up unless a step says otherwise.  
+Shared peers string (fix if `hostname -I` differs):
+
+```bash
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+```
+
+### E2 overloaded — PC1 + PC4
+
+**PC1** — `Ctrl+C` node, restart slow:
+
+```bash
+cd ~/Projects/RescueMesh
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=1
+export RM_SIM_DELAY_MS=2500
+cargo run --release -- node
+```
+
+**PC2 / PC3** — leave running (default delay ~300).
+
+**PC4:**
+
+```bash
+cd ~/Projects/RescueMesh
+source stress/lab/nodes.env
+python3 stress/report/run_phase1_suite.py --scenario e2 --tag overloaded --clients 30
+```
+
+Compare `stress/results/e2_imbalance/report/win_share.md` (N1 share should drop vs balanced).
+
+**PC1 after E2** — restore normal delay (`Ctrl+C`, then):
+
+```bash
+unset RM_SIM_DELAY_MS
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=1
+cargo run --release -- node
+```
+
+### E3 (optional) — PC1+PC2+PC3 + PC4
+
+For each policy in `weighted` | `queue` | `cpu` | `random`:
+
+**PC1 / PC2 / PC3** — restart with the same policy:
+
+```bash
+export RM_POLICY=queue    # change each round
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=1       # 2 on PC2, 3 on PC3
+cargo run --release -- node
+```
+
+**PC4:**
+
+```bash
+python3 stress/report/run_phase1_suite.py --scenario e2 --tag policy_queue --clients 30
+```
+
+(Use tags `policy_weighted`, `policy_cpu`, `policy_random` to match.) Skip E3 if short on time.
+
+### E4 — PC4 + PC2 (20s failure)
+
+**PC1 / PC2 / PC3** — nodes running normally.
+
+**PC4:**
+
+```bash
+cd ~/Projects/RescueMesh
+source stress/lab/nodes.env
+python3 stress/report/run_phase1_suite.py --scenario e4 --clients 30 --duration-s 60 --mute-s 20 --fail-after-s 15
+```
+
+**When the script prints the fail time (~15s in) — on PC2:**
+
+```bash
+# Ctrl+C the node
+# wait ~20 seconds
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=2
+cargo run --release -- node
+```
+
+Let PC4 finish → `stress/results/e4_fail20/report/table_d_failure.md`.
+
+### E5 — PC4 (after E4)
+
+```bash
+python3 stress/report/run_phase1_suite.py --scenario e5
+```
+
+On **PC2** log confirm `SYNC,...` then ready. Check e5/e4 `convergence.json`.
+
+### Election logs — PC1–3 tee, PC4 parse
+
+**PC1 / PC2 / PC3** (when starting nodes):
+
+```bash
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=1   # 2 / 3 on other PCs
+cargo run --release -- node 2>&1 | tee /tmp/node${RM_NODE_ID}.log
+```
+
+**PC4** (copy logs from the three PCs if needed, then):
+
+```bash
+python3 stress/report/parse_election_logs.py \
+  --logs /tmp/node1.log /tmp/node2.log /tmp/node3.log \
+  --out stress/results/election_overhead
+```
+
+### Checklist — PC4
+
+```bash
+python3 stress/report/run_phase1_suite.py --scenario check
+```
+
+| Step | PC1 | PC2 | PC3 | PC4 |
+|------|-----|-----|-----|-----|
+| E2 overloaded | Restart slow | Node up | Node up | Run script |
+| E3 | Restart w/ policy | Same | Same | Run script |
+| E4 | Node up | Kill 20s, restart | Node up | Run script |
+| E5 | — | Synced node | — | `e5` |
+| Election | `tee` log | `tee` log | `tee` log | Parse |
+| Check | — | — | — | `check` |
+
 ---
 
 ## 1. E1 — Increasing load (core stress bullet)
