@@ -2,6 +2,6 @@
 
 | Node | convergence_ms |
 |-----:|---------------:|
-| 2 | 7429.7 |
+| 2 | 14406.8 |
 
 Pass: node appears in processed_by again only after revive/sync.
