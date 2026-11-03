@@ -4,7 +4,7 @@ From per-request CSVs (udp_load_client). mean +/- sample stdev over repeats.
 
 | Clients | Repeats | Throughput (req/s) mean+/-s | Error rate mean+/-s | p50 ms | p95 ms | p99 ms |
 |--------:|--------:|----------------------------:|--------------------:|-------:|-------:|-------:|
-| 30 | 10 | 56.12+/-4.78 | 0.000+/-0.000 | 507.5+/-2.2 | 519.2+/-3.0 | 762.5+/-694.5 |
+| 30 | 15 | 45.28+/-16.35 | 0.000+/-0.000 | 479.2+/-41.4 | 1221.9+/-1028.6 | 1396.3+/-1082.1 |
 
 ## Pass check (project)
 - Throughput rises then flattens under saturation.
