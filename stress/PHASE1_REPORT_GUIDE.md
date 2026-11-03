@@ -211,6 +211,12 @@ If E4 was already run correctly once, you can skip the load and only run `python
 
 ### Election logs — PC1–3 tee, PC4 parse
 
+Full checklist (thresholds, demo polish, optional E3, Phase 2 discovery note):  
+**`stress/DEMO_PHASE1.md`**  
+
+**What’s still missing + copy-paste commands only:**  
+**`stress/MISSING_PHASE1.md`**
+
 **PC1 / PC2 / PC3** (when starting nodes):
 
 ```bash
@@ -222,9 +228,20 @@ cargo run --release -- node 2>&1 | tee /tmp/node${RM_NODE_ID}.log
 **PC4** (copy logs from the three PCs if needed, then):
 
 ```bash
+bash stress/report/run_election_overhead.sh
+# or:
 python3 stress/report/parse_election_logs.py \
   --logs /tmp/node1.log /tmp/node2.log /tmp/node3.log \
   --out stress/results/election_overhead
+```
+
+### Optional E3 — PC4 (nodes restarted with RM_POLICY)
+
+```bash
+bash stress/report/run_e3_policies.sh weighted
+bash stress/report/run_e3_policies.sh queue
+bash stress/report/run_e3_policies.sh cpu
+bash stress/report/run_e3_policies.sh random
 ```
 
 ### Checklist — PC4

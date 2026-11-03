@@ -8,6 +8,8 @@ Branch: **`stress-testing-lab`** (based on `incident_proc_coord`)
 |-----|---------|
 | **[MULTI_PC_LAB_GUIDE.md](MULTI_PC_LAB_GUIDE.md)** | Bring up 6 PCs, IPs, firewall, smoke |
 | **[PHASE1_REPORT_GUIDE.md](PHASE1_REPORT_GUIDE.md)** | **Project-required stress tests** (E1–E5, failover, election overhead) |
+| **[DEMO_PHASE1.md](DEMO_PHASE1.md)** | Election overhead + live demo + E3 + coverage/thresholds |
+| **[MISSING_PHASE1.md](MISSING_PHASE1.md)** | **What’s left** — full commands only for gaps |
 
 ## What the harness actually tests
 
