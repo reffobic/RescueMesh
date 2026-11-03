@@ -1,0 +1,1 @@
+CLIENT_METRICS,submitted=10,succeeded=9,failed=0,timed_out=1,mean_ms=42.50,median_ms=40.00,p95_ms=80.00,p99_ms=90.00,throughput_rps=12.30,queue_wait_ms=1.20,max_in_flight=32,per_node={1: 4, 2: 3, 3: 2}
