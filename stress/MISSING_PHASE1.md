@@ -93,6 +93,52 @@ cat stress/results/election_overhead/election_overhead.md
 
 **Done when:** `stress/results/election_overhead/election_overhead.md` exists and shows election count + p50/p95 µs + winner counts.
 
+### If you cannot copy `/tmp` logs to PC4 — Option A (parse on each cloud PC)
+
+Run parse **where the log already is**. No `scp` needed.
+
+**On PC1** (after node was started with `tee /tmp/node1.log` and some load ran):
+
+```bash
+cd ~/Projects/RescueMesh
+python3 stress/report/parse_election_logs.py \
+  --logs /tmp/node1.log \
+  --out stress/results/election_overhead_n1
+cat stress/results/election_overhead_n1/election_overhead.md
+```
+
+**On PC2:**
+
+```bash
+cd ~/Projects/RescueMesh
+python3 stress/report/parse_election_logs.py \
+  --logs /tmp/node2.log \
+  --out stress/results/election_overhead_n2
+cat stress/results/election_overhead_n2/election_overhead.md
+```
+
+**On PC3:**
+
+```bash
+cd ~/Projects/RescueMesh
+python3 stress/report/parse_election_logs.py \
+  --logs /tmp/node3.log \
+  --out stress/results/election_overhead_n3
+cat stress/results/election_overhead_n3/election_overhead.md
+```
+
+Then either paste the three `.md` files into the report, or from each PC:
+
+```bash
+git add stress/results/election_overhead_n1   # n2 / n3 on other PCs
+git commit -m "Add election overhead from node N"
+git push origin stress-testing-lab
+```
+
+On PC4: `git pull` to collect all three. For the write-up, combine election counts / p95 from the three summaries (or use the richest log if one node ran most elections).
+
+**Done when:** at least one (ideally three) `election_overhead_n*.md` exists with election duration stats.
+
 ---
 
 ## 2. Live demo polish (REQUIRED for demo — no new code)
