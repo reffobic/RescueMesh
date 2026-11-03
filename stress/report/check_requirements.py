@@ -98,7 +98,7 @@ def main() -> int:
         (
             "Election duration / overhead from node logs",
             exists_nonempty(elec),
-            "tee node logs; python parse_election_logs.py --logs ...",
+            "tee nodes; bash stress/report/run_election_overhead.sh (see DEMO_PHASE1.md)",
         )
     )
 
