@@ -2,9 +2,9 @@
 
 ## Sources
 
-- stress\results\election_overhead_n1 (2404 rows)
-- stress\results\election_overhead_n2 (1119 rows)
-- stress\results\election_overhead_n3 (234 rows)
+- stress/results/election_overhead_n1 (2404 rows)
+- stress/results/election_overhead_n2 (1119 rows)
+- stress/results/election_overhead_n3 (234 rows)
 
 - Merged unique election samples: **3757**
 

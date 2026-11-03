@@ -154,8 +154,7 @@ cat stress/results/election_overhead/election_overhead.md
 (Defaults are already `n1 n2 n3` → `election_overhead`, so this also works:)
 
 ```bash
-python3 stress/report/merge_election_overhead.py
-cat stress/results/election_overhead/election_overhead.md
+
 ```
 
 **Done when:** `stress/results/election_overhead/election_overhead.md` exists (merged unique elections + p50/p95 + winner counts). Missing `n1`/`n2`/`n3` folders are skipped with a warning — pull/push until all three are present for a full merge.
