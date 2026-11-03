@@ -1,0 +1,8 @@
+{
+  "peers": [
+    {"id": 1, "host": "10.40.32.242", "port": 7001},
+    {"id": 2, "host": "10.40.2.29", "port": 7002},
+    {"id": 3, "host": "10.40.0.73", "port": 7003}
+  ],
+  "notes": "Update hosts if hostname -I on cloud PCs differs. Clients are not listed here."
+}

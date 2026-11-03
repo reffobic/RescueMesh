@@ -1,0 +1,27 @@
+{
+  "name": "e1_ramp",
+  "description": "Baseline latency/throughput vs concurrent clients (no faults)",
+  "dry_run": true,
+  "config": {
+    "name": "e1_ramp",
+    "description": "Baseline latency/throughput vs concurrent clients (no faults)",
+    "hosts": "configs/hosts.json",
+    "dry_run_ok": true,
+    "warmup_s": 3,
+    "repeats": 5,
+    "client_counts": [
+      1,
+      5,
+      10,
+      25,
+      50,
+      100
+    ],
+    "requests_per_client": 40,
+    "timeout_s": 5.0,
+    "send_ack": true,
+    "pause_between_repeats_s": 2,
+    "output_dir": "results/e1_ramp"
+  },
+  "started_unix": 1793458550.4881966
+}

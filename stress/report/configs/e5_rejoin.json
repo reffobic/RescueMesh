@@ -1,0 +1,16 @@
+{
+  "name": "e5_rejoin",
+  "description": "Table E — Rejoin / convergence after revive",
+  "table": "E",
+  "repeats": 3,
+  "client_counts": [30],
+  "requests_per_user": 30,
+  "max_in_flight": 64,
+  "timeout_ms": 10000,
+  "warmup_s": 2,
+  "pause_between_repeats_s": 3,
+  "use_release": true,
+  "manual_rejoin": true,
+  "output_dir": "stress/results/e5_rejoin",
+  "notes": "Mute/stop a node, wait, restart it, watch SYNC / REJOINED. Fill convergence_ms in rejoin_notes.csv."
+}

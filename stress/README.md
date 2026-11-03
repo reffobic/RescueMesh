@@ -2,27 +2,45 @@
 
 Branch: **`stress-testing-lab`** (based on `incident_proc_coord`)
 
-## Start here
+## Guides
 
-Read **[MULTI_PC_LAB_GUIDE.md](MULTI_PC_LAB_GUIDE.md)** for the full 6-PC procedure (IPs, firewall, `RM_NODE_ID`, ramp, failure test).
+| Doc | Purpose |
+|-----|---------|
+| **[MULTI_PC_LAB_GUIDE.md](MULTI_PC_LAB_GUIDE.md)** | Bring up 6 PCs, IPs, firewall, smoke |
+| **[PHASE1_REPORT_GUIDE.md](PHASE1_REPORT_GUIDE.md)** | **Project-required stress tests** (E1–E5, failover, election overhead) |
 
-## Quick path
+## What the harness actually tests
+
+Aligned to the Phase 1 project description:
+
+1. **Increasing client load** with repeats → latency p50/p95/p99 + throughput mean±σ  
+2. **Load-aware election evidence** → per-node win share; imbalance via `RM_SIM_DELAY_MS`  
+3. **≤20s failure** under load → success continues; **failover_ms**  
+4. **Rejoin / convergence** → node wins again after `SYNC`  
+5. **Election overhead** from teed `ELECTION,` node logs  
+6. **`check_requirements.py`** PASS/FAIL checklist  
+
+## Quick start (nodes already up)
 
 ```bash
-# Every PC
-git checkout stress-testing-lab
-cargo build --release
 source stress/lab/nodes.env
-python3 stress/lab/verify_ips.py
-python3 stress/lab/check_connectivity.py
 
-# Cloud PC1/2/3
-bash stress/lab/start_node.sh 1   # or 2 / 3
+# Offline harness check
+python3 stress/report/run_phase1_suite.py --scenario e1 --dry-run --quick
 
-# Client PC4/5/6 — smoke then ramp
-bash stress/lab/smoke_test.sh
-bash stress/lab/run_client_ramp.sh stress/results/lab_ramp
-python3 stress/lab/parse_client_metrics.py stress/results/lab_ramp --out stress/results/lab_ramp/report.csv
+# Live campaign
+python3 stress/report/run_phase1_suite.py --scenario e1
+python3 stress/report/run_phase1_suite.py --scenario e4 --clients 30 --duration-s 60
+python3 stress/report/parse_election_logs.py --logs /tmp/node1.log /tmp/node2.log /tmp/node3.log \
+  --out stress/results/election_overhead
+python3 stress/report/run_phase1_suite.py --scenario check
 ```
 
-Windows PowerShell: `Start-Node.ps1`, `Start-Client.ps1`, `Run-ClientRamp.ps1` under `lab/`.
+## Lab bring-up
+
+See `MULTI_PC_LAB_GUIDE.md`. Short path:
+
+```bash
+bash stress/lab/start_node.sh 1   # cloud: 1|2|3
+bash stress/lab/smoke_test.sh     # client
+```

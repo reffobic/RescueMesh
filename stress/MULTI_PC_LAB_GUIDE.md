@@ -299,21 +299,41 @@ Total offered load when all three run the load block ≈ `3 × 15 × 20` submiss
 
 ---
 
-## 4. Automated stress ramp (recommended)
+## 4. Automated stress ramp + Phase 1 report tables
 
-On **one coordinator client PC** (e.g. PC4), or run the same ramp on all three clients with different `RM_CLIENT_ID`:
+### 4a. Quick ramp (smoke / informal)
+
+On **one coordinator client PC** (e.g. PC4):
 
 ```bash
 source stress/lab/nodes.env
 mkdir -p stress/results/lab_ramp
 bash stress/lab/run_client_ramp.sh stress/results/lab_ramp
-```
-
-This loops increasing `RM_CLIENT_USERS`, saves each `CLIENT_METRICS` line, then:
-
-```bash
 python3 stress/lab/parse_client_metrics.py stress/results/lab_ramp --out stress/results/lab_ramp/report.csv
 ```
+
+### 4b. Phase 1 project stress suite (required evidence — not tables-only)
+
+Full procedures: **`stress/PHASE1_REPORT_GUIDE.md`**.
+
+This suite exercises the **project description**: load ramp + stats, win share, 20s failure/failover, rejoin, election logs.
+
+```bash
+source stress/lab/nodes.env
+# Offline harness check
+python3 stress/report/run_phase1_suite.py --scenario e1 --dry-run --quick
+
+# Live E1 ramp (per-request CSV → Table A + win share)
+python3 stress/report/run_phase1_suite.py --scenario e1
+
+# 20s failure under load (Ctrl+C node 2 when prompted)
+python3 stress/report/run_phase1_suite.py --scenario e4 --clients 30 --duration-s 60
+
+# Checklist vs project requirements
+python3 stress/report/run_phase1_suite.py --scenario check
+```
+
+Also run E2 imbalance (`RM_SIM_DELAY_MS` on one node) and `parse_election_logs.py` on teed node logs — see the Phase 1 guide.
 
 ### What “working properly” looks like
 
@@ -471,4 +491,14 @@ cargo run --release -- client
 | `lab/Start-Node.ps1` | Windows node starter |
 | `lab/Start-Client.ps1` | Windows client starter |
 | `lab/Run-ClientRamp.ps1` | Windows ramp |
+| `PHASE1_REPORT_GUIDE.md` | Project-required stress tests + tables |
+| `report/run_phase1_suite.py` | E1–E5 / check orchestrator |
+| `report/udp_load_client.py` | Per-request CSV load (failover/p95) |
+| `report/analyze_request_csv.py` | Tables + failover_ms / convergence |
+| `report/parse_election_logs.py` | Election duration from node logs |
+| `report/check_requirements.py` | PASS/FAIL vs project checklist |
+| `report/run_phase1_experiments.py` | Optional cargo-client batch ramp |
+| `report/build_report_tables.py` | Aggregate cargo `runs.csv` |
+| `report/configs/*.json` | Extra cargo-client configs |
+| `report/templates/report_tables.md` | Blank Table A–E skeletons |
 | `MULTI_PC_LAB_GUIDE.md` | This document |
