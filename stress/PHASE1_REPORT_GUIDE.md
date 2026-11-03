@@ -136,13 +136,78 @@ cargo run --release -- node
 
 Let PC4 finish → `stress/results/e4_fail20/report/table_d_failure.md`.
 
-### E5 — PC4 (after E4)
+### E5 full rerun (E4 kill/restart window + convergence)
+
+E5 measures **rejoin after failure**. Rerun = timed load on PC4, kill/restart **PC2**, then collect `convergence_ms`.
+
+**PC1** — node 1 (leave running):
+
+```bash
+cd ~/Projects/RescueMesh
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=1
+unset RM_SIM_DELAY_MS
+cargo run --release -- node 2>&1 | tee /tmp/node1.log
+```
+
+**PC2** — node 2 (you will kill this mid-run):
+
+```bash
+cd ~/Projects/RescueMesh
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=2
+unset RM_SIM_DELAY_MS
+cargo run --release -- node 2>&1 | tee /tmp/node2.log
+```
+
+**PC3** — node 3 (leave running):
+
+```bash
+cd ~/Projects/RescueMesh
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=3
+unset RM_SIM_DELAY_MS
+cargo run --release -- node 2>&1 | tee /tmp/node3.log
+```
+
+**PC4** — start timed failure + rejoin load:
+
+```bash
+cd ~/Projects/RescueMesh
+source stress/lab/nodes.env
+python3 stress/report/run_phase1_suite.py --scenario e4 --clients 30 --duration-s 60 --mute-s 20 --fail-after-s 15
+```
+
+**PC2** — at ~15 seconds into the PC4 run:
+
+```bash
+# Ctrl+C the node
+# wait ~20 seconds, then:
+cd ~/Projects/RescueMesh
+export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
+export RM_NODE_ID=2
+cargo run --release -- node 2>&1 | tee -a /tmp/node2.log
+```
+
+Look for `SYNC,2,...` on PC2.
+
+**PC4** — after the 60s client finishes:
 
 ```bash
 python3 stress/report/run_phase1_suite.py --scenario e5
+
+echo "=== convergence ==="
+cat stress/results/e4_fail20/report/convergence.json
+cat stress/results/e5_rejoin/report/table_e_rejoin.md
+
+echo "=== failover (same run) ==="
+cat stress/results/e4_fail20/report/failover.json
+cat stress/results/e4_fail20/report/table_d_failure.md
 ```
 
-On **PC2** log confirm `SYNC,...` then ready. Check e5/e4 `convergence.json`.
+**Pass:** successes during mute (`success_rate_during_20s > 0`); `SYNC` on PC2; `convergence_ms` set; node 2 appears in `processed_by` again.
+
+If E4 was already run correctly once, you can skip the load and only run `python3 stress/report/run_phase1_suite.py --scenario e5` to copy/refresh e5 report files from e4.
 
 ### Election logs — PC1–3 tee, PC4 parse
 
@@ -263,10 +328,14 @@ When the script prints the plan:
 
 ## 5. E5 — Rejoin / convergence
 
-After E4 (node restarted inside the window):
+**Full PC1–PC4 rerun commands:** see **“E5 full rerun”** above in *Exact commands by PC*.
+
+Quick path if E4 already included a PC2 restart:
 
 ```bash
 python3 stress/report/run_phase1_suite.py --scenario e5
+cat stress/results/e4_fail20/report/convergence.json
+cat stress/results/e5_rejoin/report/table_e_rejoin.md
 ```
 
 Confirm on the revived node log: `SYNC,<id>,<peer>,…` then ready.  
