@@ -214,9 +214,9 @@ You may already have `policy_queue` data. Still missing for a full table: **weig
 
 ```bash
 cd ~/Projects/RescueMesh
-export RM_POLICY=P          # replace P: weighted | queue | cpu | random
+export RM_POLICY=weighted          # replace P: weighted | queue | cpu | random
 export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_NODE_ID=1         # 2 on PC2, 3 on PC3
+export RM_NODE_ID=3         # 2 on PC2, 3 on PC3
 cargo run --release -- node
 ```
 

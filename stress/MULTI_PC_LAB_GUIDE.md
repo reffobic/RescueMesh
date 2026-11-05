@@ -77,7 +77,7 @@ cd RescueMesh
 cargo build --release
 ```
 
-Use `target/release/rescue_mesh` for less JIT noise during stress, or `cargo run --release -- …`.
+Use `target/release/rescue_mesh` for less JIT noise during stress, or `cargo run --release -- node`.
 
 ### 1.5 Firewall (UDP must be open)
 
@@ -210,22 +210,16 @@ You should see a `CLIENT_METRICS,...` line with `succeeded=1` (or close).
 
 ---
 
-## 3. Client PCs (PC4–PC6) — commands in order
+## 3. Client PCs (PC4–PC6)
 
-Start **PC1–PC3 nodes first**. Do **not** set `RM_NODE_ID` on clients (only `RM_NODES`).
+Do **not** set `RM_NODE_ID` on clients (only `RM_NODES`).
 
-**Pass (smoke):** `CLIENT_METRICS,...succeeded=1...` (and not all `timed_out`).  
-**Order:** smoke on PC4 → then smoke PC5/PC6 → then run the load block on PC4/5/6 together for multi-PC stress.
-
-### PC4 — `10.40.1.240`
-
-**Smoke:**
+### Smoke test (one request) — each client PC
 
 ```bash
-cd ~/Projects/RescueMesh
-hostname -I
-export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_CLIENT_ID=pc4
+cd RescueMesh
+source stress/lab/nodes.env
+export RM_CLIENT_ID="pc4-smoke"   # change per PC: pc5-smoke / pc6-smoke
 export RM_CLIENT_USERS=1
 export RM_CLIENT_REQUESTS_PER_USER=1
 export RM_CLIENT_MAX_IN_FLIGHT=1
@@ -233,107 +227,53 @@ export RM_CLIENT_TIMEOUT_MS=5000
 cargo run --release -- client
 ```
 
-**Load:**
+**Pass:** `succeeded=1`, `timed_out=0`, `per_node={…}` shows which cloud node processed it.
+
+### Concurrent clients on one PC
 
 ```bash
+source stress/lab/nodes.env
+export RM_CLIENT_ID="pc4-load"
+export RM_CLIENT_USERS=20
+export RM_CLIENT_REQUESTS_PER_USER=10
+export RM_CLIENT_MAX_IN_FLIGHT=32
+export RM_CLIENT_TIMEOUT_MS=8000
+cargo run --release -- client 2>&1 | tee results/pc4_u20.txt
+```
+
+### All three client PCs at once (real multi-PC stress)
+
+On PC4, PC5, PC6 **at the same time**:
+
+```bash
+source stress/lab/nodes.env
+export RM_CLIENT_ID="pcX-$(hostname)"   # unique per machine
 export RM_CLIENT_USERS=15
 export RM_CLIENT_REQUESTS_PER_USER=20
 export RM_CLIENT_MAX_IN_FLIGHT=32
 export RM_CLIENT_TIMEOUT_MS=8000
-cargo run --release -- client
+cargo run --release -- client 2>&1 | tee "results/$(hostname)_client.txt"
 ```
 
-### PC5 — `10.40.39.134`
-
-**Smoke:**
-
-```bash
-cd ~/Projects/RescueMesh
-hostname -I
-export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_CLIENT_ID=pc5
-export RM_CLIENT_USERS=1
-export RM_CLIENT_REQUESTS_PER_USER=1
-export RM_CLIENT_MAX_IN_FLIGHT=1
-export RM_CLIENT_TIMEOUT_MS=5000
-cargo run --release -- client
-```
-
-**Load** (keep `RM_CLIENT_ID=pc5`):
-
-```bash
-export RM_CLIENT_USERS=15
-export RM_CLIENT_REQUESTS_PER_USER=20
-export RM_CLIENT_MAX_IN_FLIGHT=32
-export RM_CLIENT_TIMEOUT_MS=8000
-cargo run --release -- client
-```
-
-### PC6 — `10.40.5.45`
-
-**Smoke:**
-
-```bash
-cd ~/Projects/RescueMesh
-hostname -I
-export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_CLIENT_ID=pc6
-export RM_CLIENT_USERS=1
-export RM_CLIENT_REQUESTS_PER_USER=1
-export RM_CLIENT_MAX_IN_FLIGHT=1
-export RM_CLIENT_TIMEOUT_MS=5000
-cargo run --release -- client
-```
-
-**Load** (keep `RM_CLIENT_ID=pc6`):
-
-```bash
-export RM_CLIENT_USERS=15
-export RM_CLIENT_REQUESTS_PER_USER=20
-export RM_CLIENT_MAX_IN_FLIGHT=32
-export RM_CLIENT_TIMEOUT_MS=8000
-cargo run --release -- client
-```
-
-Total offered load when all three run the load block ≈ `3 × 15 × 20` submissions.
+Total offered load ≈ `3 × users × requests_per_user` submissions.
 
 ---
 
-## 4. Automated stress ramp + Phase 1 report tables
+## 4. Automated stress ramp (recommended)
 
-### 4a. Quick ramp (smoke / informal)
-
-On **one coordinator client PC** (e.g. PC4):
+On **one coordinator client PC** (e.g. PC4), or run the same ramp on all three clients with different `RM_CLIENT_ID`:
 
 ```bash
 source stress/lab/nodes.env
 mkdir -p stress/results/lab_ramp
 bash stress/lab/run_client_ramp.sh stress/results/lab_ramp
-python3 stress/lab/parse_client_metrics.py stress/results/lab_ramp --out stress/results/lab_ramp/report.csv
 ```
 
-### 4b. Phase 1 project stress suite (required evidence — not tables-only)
-
-Full procedures: **`stress/PHASE1_REPORT_GUIDE.md`**.
-
-This suite exercises the **project description**: load ramp + stats, win share, 20s failure/failover, rejoin, election logs.
+This loops increasing `RM_CLIENT_USERS`, saves each `CLIENT_METRICS` line, then:
 
 ```bash
-source stress/lab/nodes.env
-# Offline harness check
-python3 stress/report/run_phase1_suite.py --scenario e1 --dry-run --quick
-
-# Live E1 ramp (per-request CSV → Table A + win share)
-python3 stress/report/run_phase1_suite.py --scenario e1
-
-# 20s failure under load (Ctrl+C node 2 when prompted)
-python3 stress/report/run_phase1_suite.py --scenario e4 --clients 30 --duration-s 60
-
-# Checklist vs project requirements
-python3 stress/report/run_phase1_suite.py --scenario check
+python3 stress/lab/parse_client_metrics.py stress/results/lab_ramp --out stress/results/lab_ramp/report.csv
 ```
-
-Also run E2 imbalance (`RM_SIM_DELAY_MS` on one node) and `parse_election_logs.py` on teed node logs — see the Phase 1 guide.
 
 ### What “working properly” looks like
 
@@ -433,30 +373,15 @@ export RM_NODE_ID=3
 cargo run --release -- node
 ```
 
-### Clients (see §3 for full smoke → load per PC)
+### Clients
 
-**PC4 (`10.40.1.240`) smoke:**
+**PC4 / PC5 / PC6** (change `RM_CLIENT_ID`):
 ```bash
-cd ~/Projects/RescueMesh
-hostname -I
 export RM_NODES="1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003"
-export RM_CLIENT_ID=pc4
-export RM_CLIENT_USERS=1
-export RM_CLIENT_REQUESTS_PER_USER=1
-export RM_CLIENT_MAX_IN_FLIGHT=1
-export RM_CLIENT_TIMEOUT_MS=5000
-cargo run --release -- client
-```
-
-**PC5:** same as PC4 with `export RM_CLIENT_ID=pc5`  
-**PC6:** same as PC4 with `export RM_CLIENT_ID=pc6`
-
-**Load (any client PC, after smoke):**
-```bash
-export RM_CLIENT_USERS=15
-export RM_CLIENT_REQUESTS_PER_USER=20
+export RM_CLIENT_ID="pc4"
+export RM_CLIENT_USERS=10
+export RM_CLIENT_REQUESTS_PER_USER=10
 export RM_CLIENT_MAX_IN_FLIGHT=32
-export RM_CLIENT_TIMEOUT_MS=8000
 cargo run --release -- client
 ```
 
@@ -491,14 +416,4 @@ cargo run --release -- client
 | `lab/Start-Node.ps1` | Windows node starter |
 | `lab/Start-Client.ps1` | Windows client starter |
 | `lab/Run-ClientRamp.ps1` | Windows ramp |
-| `PHASE1_REPORT_GUIDE.md` | Project-required stress tests + tables |
-| `report/run_phase1_suite.py` | E1–E5 / check orchestrator |
-| `report/udp_load_client.py` | Per-request CSV load (failover/p95) |
-| `report/analyze_request_csv.py` | Tables + failover_ms / convergence |
-| `report/parse_election_logs.py` | Election duration from node logs |
-| `report/check_requirements.py` | PASS/FAIL vs project checklist |
-| `report/run_phase1_experiments.py` | Optional cargo-client batch ramp |
-| `report/build_report_tables.py` | Aggregate cargo `runs.csv` |
-| `report/configs/*.json` | Extra cargo-client configs |
-| `report/templates/report_tables.md` | Blank Table A–E skeletons |
 | `MULTI_PC_LAB_GUIDE.md` | This document |
