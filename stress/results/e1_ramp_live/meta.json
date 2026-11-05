@@ -1,0 +1,29 @@
+{
+  "name": "e1_ramp",
+  "description": "Table A \u2014 Latency & throughput vs concurrent clients (no faults)",
+  "table": "A",
+  "dry_run": true,
+  "quick": true,
+  "config": {
+    "name": "e1_ramp",
+    "description": "Table A \u2014 Latency & throughput vs concurrent clients (no faults)",
+    "table": "A",
+    "repeats": 2,
+    "client_counts": [
+      1,
+      5,
+      10
+    ],
+    "requests_per_user": 40,
+    "max_in_flight": 64,
+    "timeout_ms": 8000,
+    "rate_ms": 0,
+    "warmup_s": 2,
+    "pause_between_repeats_s": 2,
+    "use_release": true,
+    "output_dir": "stress/results/e1_ramp_live"
+  },
+  "RM_NODES": "1@10.40.32.242:7001,2@10.40.2.29:7002,3@10.40.0.73:7003",
+  "started_unix": 1793700829.6945784,
+  "git": "5da536f"
+}

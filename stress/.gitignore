@@ -1,6 +1,4 @@
-# Keep scripts/configs; ignore heavy experiment outputs
-results/**
-!results/.gitkeep
+# Local clutter — experiment CSV/JSON/PNG under results/ are tracked
 __pycache__/
 *.pyc
 .venv/
