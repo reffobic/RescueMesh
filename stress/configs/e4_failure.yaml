@@ -1,0 +1,13 @@
+name: e4_failure
+description: Inject silence during load; measure failover and success during mute
+hosts: configs/hosts.json
+repeats: 5
+client_counts: [20, 50, 100]
+requests_per_client: 80
+timeout_s: 8.0
+warmup_s: 5
+failure:
+  node_id: 1
+  mute_secs: [5, 10, 20]
+  start_after_s: 8
+output_dir: results/e4_failure

@@ -1,0 +1,10 @@
+{
+  "fail_at_unix": 1793722095.8249767,
+  "failed_node": "2",
+  "failover_ms": 286.1006259918213,
+  "success_rate_during_20s": 1.0,
+  "n_during": 1170,
+  "ok_during": 1170,
+  "last_success_on_failed_before": 1793722095.7089527,
+  "first_success_on_other_after": 1793722096.1110773
+}

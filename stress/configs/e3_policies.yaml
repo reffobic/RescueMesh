@@ -1,0 +1,10 @@
+name: e3_policies
+description: Compare RM_POLICY weighted|queue|cpu|random at fixed load
+hosts: configs/hosts.json
+repeats: 5
+client_counts: [40]
+requests_per_client: 40
+timeout_s: 5.0
+policies: ["weighted", "queue", "cpu", "random"]
+note: Restart nodes with RM_POLICY set before each policy block (or use admin API).
+output_dir: results/e3_policies

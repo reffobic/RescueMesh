@@ -1,0 +1,16 @@
+{
+  "scenario": "e1",
+  "requirement": "Stress across increasing client loads; mean/variance latency & throughput",
+  "clients_list": [
+    1,
+    5,
+    10,
+    25,
+    50,
+    100
+  ],
+  "repeats": 5,
+  "requests_per_client": 40,
+  "started_unix": 1793713887.312804,
+  "dry_run": false
+}

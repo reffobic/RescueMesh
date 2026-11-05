@@ -1,0 +1,5 @@
+# Local clutter — experiment CSV/JSON/PNG under results/ are tracked
+__pycache__/
+*.pyc
+.venv/
+venv/

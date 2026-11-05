@@ -1,0 +1,13 @@
+name: e5_rejoin
+description: After mute, measure convergence_ms and consistency
+hosts: configs/hosts.json
+repeats: 5
+client_counts: [30, 60]
+requests_per_client: 40
+timeout_s: 8.0
+failure:
+  node_id: 2
+  mute_secs: [10]
+  start_after_s: 5
+  wait_recovery_s: 30
+output_dir: results/e5_rejoin
