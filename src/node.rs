@@ -4,7 +4,7 @@
 
 use crate::election::{supersedes, wait_for, Config, ElectionStrategy, Metrics, NO_WINNER};
 use crate::planner::{self, PlannerParams};
-use crate::snapshot::{SnapshotParams, SnapshotSource, SyntheticSource};
+use crate::snapshot::{SnapshotParams, SnapshotSource, SplitMix64, SyntheticSource};
 use crate::types::{IncidentRequest, ResponsePlan};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -137,6 +137,40 @@ impl SyncProgress {
 const SYNC_CHUNK: usize = 8;
 const SYNC_ATTEMPTS: usize = 3;
 
+/// Pseudo-client name used by failure-injection elections (see `Node::score_for`).
+const INJECT_CLIENT: &str = "__failure_injector__";
+
+/// Settings of the periodic failure injector. `from_env` returns None unless RM_FAIL_INJECT=1.
+#[derive(Clone, Debug)]
+pub struct InjectConfig {
+    pub period: Duration, // time between injection rounds
+    pub max_secs: u64,    // longest outage; the spec says up to 20 s
+    pub seed: u64,        // seeds the outage-length generator, so runs are repeatable
+}
+
+impl InjectConfig {
+    pub fn from_env() -> Option<Self> {
+        if std::env::var("RM_FAIL_INJECT").ok().as_deref() != Some("1") {
+            return None;
+        }
+        let get = |k: &str, d: u64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let max_secs = get("RM_FAIL_MAX_S", 20).max(1);
+        // The period leaves room for the outage plus the rejoin, so only one node is down at a time.
+        let period = get("RM_FAIL_PERIOD_S", 30).max(max_secs + 2);
+        Some(Self {
+            period: Duration::from_secs(period),
+            max_secs,
+            seed: get("RM_FAIL_SEED", 4411),
+        })
+    }
+}
+
+/// Outage length for a round, from 1 to `max_secs` seconds. It depends only on (seed, round),
+/// so every node computes the same value and a rerun with the same seed repeats it.
+pub fn mute_duration_secs(seed: u64, round: u64, max_secs: u64) -> u64 {
+    1 + SplitMix64(seed ^ round.wrapping_mul(0x9E37_79B9_7F4A_7C15)).below(max_secs as usize) as u64
+}
+
 pub struct Node {
     pub id: NodeId,
     pub peers: Vec<(NodeId, SocketAddr)>, // includes self
@@ -168,6 +202,7 @@ pub struct Node {
     pub msgs_sent: AtomicU64,
     pub elections: AtomicU64,
     pub under_replicated: AtomicU64,
+    pub injected: AtomicU64, // times this node muted itself after winning a failure-injection election
 }
 
 struct QueuedRequest {
@@ -464,6 +499,61 @@ mod tests {
         assert_eq!(node.started.lock().unwrap().len(), 1);
     }
 
+    #[test]
+    fn mute_duration_is_in_range_repeatable_and_varied() {
+        let secs: Vec<u64> = (1..=200).map(|r| mute_duration_secs(7, r, 20)).collect();
+        assert!(secs.iter().all(|s| (1..=20).contains(s)));
+        assert_eq!(secs, (1..=200).map(|r| mute_duration_secs(7, r, 20)).collect::<Vec<_>>());
+        assert!(secs.iter().collect::<HashSet<_>>().len() >= 10, "outage lengths barely vary");
+    }
+
+    #[tokio::test]
+    async fn periodic_failure_injection_elects_one_victim_and_recovers() {
+        let reservations: Vec<StdUdpSocket> = (0..3)
+            .map(|_| StdUdpSocket::bind("127.0.0.1:0").unwrap())
+            .collect();
+        let peers: Vec<_> = reservations
+            .iter()
+            .enumerate()
+            .map(|(index, socket)| (index as u32 + 1, socket.local_addr().unwrap()))
+            .collect();
+        drop(reservations);
+        let mut cfg = Config::from_env();
+        cfg.heartbeat = Duration::from_millis(50);
+        cfg.fail_after = Duration::from_millis(500);
+        cfg.t_ok = Duration::from_millis(100);
+        cfg.t_coord = Duration::from_millis(250);
+        let mut nodes = Vec::new();
+        for id in 1..=3 {
+            let node = Node::new(
+                id,
+                peers.clone(),
+                Arc::new(crate::election::LoadAwareBully::new()),
+                Arc::new(cfg.clone()),
+            )
+            .await;
+            node.spawn_loops();
+            nodes.push(node);
+        }
+        sleep(Duration::from_millis(300)).await;
+        let inj = InjectConfig { period: Duration::from_millis(2500), max_secs: 1, seed: 7 };
+        for node in &nodes {
+            node.spawn_failure_injector_with(inj.clone());
+        }
+        let mut max_down = 0;
+        let deadline = Instant::now() + Duration::from_secs(9);
+        while Instant::now() < deadline {
+            max_down = max_down.max(nodes.iter().filter(|n| n.is_muted()).count());
+            sleep(Duration::from_millis(20)).await;
+        }
+        let injected: Vec<u64> = nodes.iter().map(|n| n.injected.load(Relaxed)).collect();
+        assert!(injected.iter().sum::<u64>() >= 2, "no failures injected: {injected:?}");
+        assert_eq!(max_down, 1, "expected exactly one node down at a time, injected={injected:?}");
+        sleep(Duration::from_secs(2)).await;
+        // Whoever was muted last has come back and is ready again.
+        assert!(nodes.iter().all(|n| n.is_ready() || n.is_muted()));
+    }
+
     #[tokio::test]
     async fn concurrent_requests_keep_election_and_replication_correlated() {
         let reservations: Vec<StdUdpSocket> = (0..3)
@@ -625,6 +715,7 @@ impl Node {
             msgs_sent: AtomicU64::new(0),
             elections: AtomicU64::new(0),
             under_replicated: AtomicU64::new(0),
+            injected: AtomicU64::new(0),
         })
     }
 
@@ -752,6 +843,9 @@ impl Node {
     }
     /// Score snapshot for a request coming from `client`.
     pub fn score_for(&self, client: &str) -> u64 {
+        if client == INJECT_CLIENT {
+            return 0; // failure-injection rounds ignore load: the victim is picked by the hash tie-break
+        }
         self.metrics.score(&self.cfg, client)
     }
 
@@ -930,6 +1024,7 @@ impl Node {
         tokio::spawn(async move {
             w.begin_warmup().await;
         });
+        self.spawn_failure_injector(); // no-op unless RM_FAIL_INJECT=1
     }
 
     pub async fn handle(self: &Arc<Self>, m: Msg) {
@@ -1077,6 +1172,63 @@ impl Node {
             e.begin_warmup().await;
             println!("[node {}] REJOINED (synced, ready)", e.id);
         });
+    }
+
+     /// Periodic failure injection (spec: the servers periodically elect one machine to go silent).
+    /// Does nothing unless RM_FAIL_INJECT=1.
+    pub fn spawn_failure_injector(self: &Arc<Self>) {
+        if let Some(inj) = InjectConfig::from_env() {
+            self.spawn_failure_injector_with(inj);
+        }
+    }
+
+    pub fn spawn_failure_injector_with(self: &Arc<Self>, inj: InjectConfig) {
+        println!(
+            "[node {}] failure injection ON: period {:?}, outage 1..={} s, seed {}",
+            self.id, inj.period, inj.max_secs, inj.seed
+        );
+        let n = self.clone();
+        tokio::spawn(async move {
+            let period = inj.period.as_millis().max(1) as u64;
+            loop {
+                // Wake at the next wall-clock multiple of the period, so all nodes start round `k` together.
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+                let round = now / period + 1;
+                sleep(Duration::from_millis(round * period - now)).await;
+                n.injection_round(&inj, round).await;
+            }
+        });
+    }
+
+    async fn injection_round(self: &Arc<Self>, inj: &InjectConfig, round: u64) {
+        if self.is_muted() || !self.is_ready() {
+            return;
+        }
+        // An ordinary Bully round with a reserved request id. All scores are 0 (see `score_for`),
+        // so the winner is the node with the smallest hash of (round id, node id).
+        let key = format!("__fail_round_{round}");
+        let out = self.strategy.elect(self, &key, INJECT_CLIENT, 0).await;
+        self.strategy.forget(&key);
+        if !out.complete {
+            println!("FAILINJECT,{round},none,0");
+            return;
+        }
+        let secs = mute_duration_secs(inj.seed, round, inj.max_secs);
+        println!("FAILINJECT,{round},{},{secs}", out.winner);
+        if out.winner != self.id {
+            return;
+        }
+        // Never take down a second node: the others must still form a majority.
+        if self.alive_peers().len() + 1 < self.peers.len() {
+            println!("FAILINJECT_SKIP,{round},{}", self.id);
+            return;
+        }
+        sleep(self.cfg.t_ok).await; // let the COORDINATOR retries reach the others before going silent
+        self.injected.fetch_add(1, Relaxed);
+        self.mute_for(secs);
     }
 
     // ---------- per-request flow ----------
