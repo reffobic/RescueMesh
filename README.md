@@ -2,6 +2,8 @@
 
 Distributed rescue-coordination mesh (Rust). This branch (`stress-testing`) holds the core node/client code, the Phase 1 stress harness, and measured CSV results.
 
+Live walkthrough (professor prompts → commands): see [`DEMO.md`](DEMO.md).
+
 ## Layout
 
 | Path | Contents |
