@@ -1,14 +1,14 @@
 {
   "peers": [
-    {"id": 0, "host": "127.0.0.1", "port": 9000},
-    {"id": 1, "host": "127.0.0.1", "port": 9001},
-    {"id": 2, "host": "127.0.0.1", "port": 9002}
+    {"id": 1, "host": "10.40.32.242", "port": 7001},
+    {"id": 2, "host": "10.40.2.29", "port": 7002},
+    {"id": 3, "host": "10.40.0.73", "port": 7003}
   ],
   "admin_ports": {
-    "0": 9100,
-    "1": 9101,
-    "2": 9102
+    "1": 7001,
+    "2": 7002,
+    "3": 7003
   },
   "multicast": true,
-  "comment": "Client sends Request to all peers when multicast=true (project model)."
+  "comment": "Lab cloud nodes (same as RM_NODES). Update IPs if hostname -I differs."
 }
