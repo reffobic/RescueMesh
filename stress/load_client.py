@@ -60,14 +60,33 @@ def encode_ack(request_id: str) -> bytes:
     return json.dumps({"Ack": {"request_id": request_id}}, separators=(",", ":")).encode("utf-8")
 
 
-def parse_reply(data: bytes) -> tuple[bool, dict[str, Any] | None, str]:
+def parse_reply(data: bytes) -> tuple[bool, dict[str, Any] | None, bool, str]:
     try:
         obj = json.loads(data.decode("utf-8"))
     except Exception as e:
-        return False, None, f"json:{e}"
+        return False, None, False, f"json:{e}"
     if "Reply" in obj:
-        return True, obj["Reply"], ""
-    return False, None, f"unexpected:{list(obj)[:3]}"
+        reply = obj["Reply"]
+        plan = reply.get("plan") or {}
+        under = bool(reply.get("under_replicated", False))
+        return True, plan, under, ""
+    if "Busy" in obj:
+        return False, None, False, "busy"
+    return False, None, False, f"unexpected:{list(obj)[:3]}"
+
+
+def guess_reply_ip(peers: list[tuple[str, int]]) -> str:
+    """Local IP that can reach the first peer (same trick as cargo client)."""
+    if not peers:
+        return "0.0.0.0"
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(peers[0])
+        ip = probe.getsockname()[0]
+        probe.close()
+        return ip
+    except OSError:
+        return "0.0.0.0"
 
 
 def one_request(
@@ -85,90 +104,104 @@ def one_request(
         "incident_id": f"inc-{random.randint(1, 10_000)}",
         "reporter_id": client_id,
         "category": random.choice(CATEGORIES),
-        "location_zone": random.randint(1, 12),
-        "severity": random.randint(1, 10),
+        "location_zone": random.randint(0, 19),
+        "severity": random.randint(1, 5),
         "timestamp_ms": now_ms,
         "status": "Open",
-        "ttl_secs": 3600,
+        "ttl_secs": 300,
     }
 
+    ts_send = time.time()
     if dry_run:
         # Synthetic latency model for pipeline testing without servers.
         time.sleep(random.uniform(0.02, 0.08))
         ok = random.random() > 0.02
         return {
-            "ts_send": time.time(),
+            "ts_send": ts_send,
             "ts_recv": time.time(),
             "client_id": client_id,
             "request_id": request_id,
             "ok": int(ok),
             "latency_ms": random.uniform(30, 120) if ok else timeout_s * 1000,
-            "processed_by": random.randint(0, 2) if ok else "",
+            "processed_by": random.randint(1, 3) if ok else "",
             "under_replicated": 0,
             "error": "" if ok else "dry_timeout",
         }
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", 0))
-    sock.settimeout(timeout_s)
-    reply_ip = "127.0.0.1"
-    reply_port = sock.getsockname()[1]
-    payload = encode_request(req, reply_ip, reply_port)
-
-    targets = peers if multicast else [random.choice(peers)]
-    t0 = time.time()
     try:
+        sock.bind(("0.0.0.0", 0))
+        local_port = sock.getsockname()[1]
+        reply_ip = guess_reply_ip(peers)
+        payload = encode_request(req, reply_ip, local_port)
+
+        targets = peers if multicast else [random.choice(peers)]
         for addr in targets:
-            sock.sendto(payload, addr)
-        while True:
-            data, _ = sock.recvfrom(65535)
-            ok, reply, err = parse_reply(data)
-            if not ok:
+            try:
+                sock.sendto(payload, addr)
+            except OSError:
                 continue
-            t1 = time.time()
-            plan = reply.get("plan") or {}
-            under = bool(reply.get("under_replicated", False))
+
+        deadline = time.time() + timeout_s
+        last_err = "timeout"
+        resends = 0
+        while time.time() < deadline:
+            remaining = deadline - time.time()
+            sock.settimeout(max(0.05, min(1.0, remaining)))
+            try:
+                data, src = sock.recvfrom(65535)
+            except socket.timeout:
+                if resends < 4 and time.time() < deadline:
+                    resends += 1
+                    for addr in targets:
+                        try:
+                            sock.sendto(payload, addr)
+                        except OSError:
+                            continue
+                continue
+            ok, plan, under, err = parse_reply(data)
+            if not ok:
+                last_err = err
+                continue
+            assert plan is not None
+            if plan.get("request_id") != request_id:
+                continue
             if send_ack:
-                # Ack to all peers that might be awaiting (harmless if ignored).
-                ack = encode_ack(request_id)
-                for addr in peers:
-                    try:
-                        sock.sendto(ack, addr)
-                    except OSError:
-                        pass
+                try:
+                    sock.sendto(encode_ack(request_id), src)
+                except OSError:
+                    pass
+            ts_recv = time.time()
             return {
-                "ts_send": t0,
-                "ts_recv": t1,
+                "ts_send": ts_send,
+                "ts_recv": ts_recv,
                 "client_id": client_id,
                 "request_id": request_id,
                 "ok": 1,
-                "latency_ms": (t1 - t0) * 1000.0,
+                "latency_ms": (ts_recv - ts_send) * 1000.0,
                 "processed_by": plan.get("processed_by_node", ""),
                 "under_replicated": int(under),
                 "error": "",
             }
-    except socket.timeout:
-        t1 = time.time()
         return {
-            "ts_send": t0,
-            "ts_recv": t1,
+            "ts_send": ts_send,
+            "ts_recv": time.time(),
             "client_id": client_id,
             "request_id": request_id,
             "ok": 0,
-            "latency_ms": (t1 - t0) * 1000.0,
+            "latency_ms": (time.time() - ts_send) * 1000.0,
             "processed_by": "",
             "under_replicated": 0,
-            "error": "timeout",
+            "error": last_err,
         }
     except Exception as e:
-        t1 = time.time()
         return {
-            "ts_send": t0,
-            "ts_recv": t1,
+            "ts_send": ts_send,
+            "ts_recv": time.time(),
             "client_id": client_id,
             "request_id": request_id,
             "ok": 0,
-            "latency_ms": (t1 - t0) * 1000.0,
+            "latency_ms": (time.time() - ts_send) * 1000.0,
             "processed_by": "",
             "under_replicated": 0,
             "error": str(e),
