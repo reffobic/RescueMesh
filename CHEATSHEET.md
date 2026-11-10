@@ -2,7 +2,7 @@
 
 Substitute: `N` = `RM_CLIENT_USERS`, `R` = `RM_CLIENT_REQUESTS_PER_USER`, `T` = timeout ms, `S`/`X` = sleep seconds.
 
-Use a branch with a real node/client binary (`stress-testing-lab` or `incident_proc_coord`). Keep nodes up on PC1–3; run clients on PC4–6.
+`main` now includes the full node/client binary (Service 1 planner, load-aware election, fault tolerance, failure injection, and demo GUI). Keep nodes up on PC1–3; run clients on PC4–6.
 
 Watch client stdout for a line like:
 
@@ -18,7 +18,7 @@ CLIENT_METRICS,submitted=…,succeeded=…,failed=…,timed_out=…,mean_ms=…,
 git clone https://github.com/reffobic/RescueMesh.git
 cd RescueMesh
 git fetch origin
-git checkout stress-testing-lab
+git checkout main
 ```
 
 ```bash

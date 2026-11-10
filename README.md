@@ -1,16 +1,18 @@
 # RescueMesh
 
-Distributed rescue-coordination mesh (Rust). This branch (`stress-testing`) holds the core node/client code, the Phase 1 stress harness, and measured CSV results.
+Distributed rescue-coordination mesh (Rust). `main` unifies the full node/client runtime, Service 1 incident planner and snapshot engine, load-aware bully election, fault tolerance & quorum replication, periodic failure injection (`RM_FAIL_INJECT=1`), the demo GUI, and the Phase 1 stress harnesses and measured CSV results.
 
-Live walkthrough (professor prompts → commands): see [`DEMO.md`](DEMO.md).
+Live walkthroughs: see [`DEMO.md`](DEMO.md), [`CHEATSHEET.md`](CHEATSHEET.md), and [`stress/README.md`](stress/README.md).
 
 ## Layout
 
 | Path | Contents |
 |------|----------|
-| `src/` | Node, client, election, RPC, worker code |
-| `stress/` | Load / fault / analysis scripts and experiment configs |
-| `stress/results/` | Detailed CSV (and JSON/PNG) experiment outputs |
+| `src/` | Node (`node.rs`), client (`client.rs`), load-aware election (`election.rs`), Service 1 planner & snapshot (`planner.rs`, `snapshot.rs`), fault tolerance (`fault_tolerance.rs`), types (`types.rs`) |
+| `gui/` | Tkinter live cluster & failure-injection demo GUI (`gui/gui.py`) |
+| `docs/` | Technical documentation, architecture evidence, parallelization notes |
+| `stress/` | Multi-PC lab launchers (`lab/`), Phase 1 report & experiment suites (`report/`), and legacy harness/YAML configs |
+| `stress/results/` | Detailed CSV (and JSON/PNG/Markdown) experiment outputs |
 
 ## Build & run
 

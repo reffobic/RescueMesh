@@ -21,7 +21,7 @@ pip install -r requirements.txt
 
 Edit `configs/hosts.json` so peer IPs/ports match your lab (defaults: `127.0.0.1:9000–9002`, admin `9100–9102`).
 
-**Live only:** start three node processes listening on those ports first. On this `stress-testing` checkout, `cargo run` only prints `RescueMesh node starting...` — use your course node binary/lab image for a real mesh. Dry-run needs no nodes.
+**Live only:** start three node processes listening on those ports first (`RM_NODES=... RM_NODE_ID=1 cargo run --release -- node`, etc.). Dry-run needs no nodes.
 
 **Console summary** (`load_client`): JSON with `clients`, `attempts`, `ok`, `error_rate`, `throughput_rps`, `wall_s`, `out_csv`.
 
