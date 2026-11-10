@@ -1,0 +1,17 @@
+{
+  "name": "e4_failure",
+  "description": "Table D — Failure under load (manual mute/Ctrl+C of one node mid-run)",
+  "table": "D",
+  "repeats": 3,
+  "client_counts": [20, 50],
+  "requests_per_user": 30,
+  "max_in_flight": 64,
+  "timeout_ms": 10000,
+  "warmup_s": 2,
+  "pause_between_repeats_s": 3,
+  "use_release": true,
+  "mute_secs": [5, 20],
+  "manual_failure": true,
+  "output_dir": "stress/results/e4_failure",
+  "notes": "During each run, stop/mute node 2 after ~5s. Record failover_ms in failure_notes.csv (see guide)."
+}

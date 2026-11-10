@@ -1,0 +1,15 @@
+{
+  "name": "e3_policies",
+  "description": "Table C — Metric policy comparison (RM_POLICY)",
+  "table": "C",
+  "repeats": 5,
+  "client_counts": [30],
+  "requests_per_user": 40,
+  "max_in_flight": 64,
+  "timeout_ms": 8000,
+  "warmup_s": 2,
+  "pause_between_repeats_s": 2,
+  "use_release": true,
+  "policies": ["weighted", "queue", "cpu", "random"],
+  "output_dir": "stress/results/e3_policies"
+}

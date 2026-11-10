@@ -1,0 +1,16 @@
+{
+  "name": "e2_imbalance",
+  "description": "Table B — Load imbalance (run balanced first; then overload one node manually / RM_SIM if available)",
+  "table": "B",
+  "repeats": 5,
+  "client_counts": [30],
+  "requests_per_user": 40,
+  "max_in_flight": 64,
+  "timeout_ms": 8000,
+  "warmup_s": 2,
+  "pause_between_repeats_s": 2,
+  "use_release": true,
+  "condition": "balanced",
+  "output_dir": "stress/results/e2_imbalance_balanced",
+  "notes": "Re-run with condition=overloaded after stressing node 1 (extra queue/CPU). Copy results into Table B."
+}
